@@ -34,14 +34,24 @@ def execute_sql_node(state: AgentState, config: dict) -> dict:
     try:
         memory_client = get_memory()
         if memory_client.add(user_id=user_id, text=memory_text):
-            print(f"已保存到长期记忆: {memory_text}")
+            # print(f"已保存到长期记忆: {memory_text}")
+            pass
         else:
-            print(f"未能保存到长期记忆 (未初始化或错误)")
+            # print(f"未能保存到长期记忆 (未初始化或错误)")
+            pass
     except Exception as e:
-        print(f"保存记忆失败: {e}")
+        # print(f"保存记忆失败: {e}")
+        pass
     
     # 我们返回结果，并将其作为一条消息添加到历史记录中
+    # 注意：为了防止 Context Window 溢出，如果结果过长，我们在历史记录中只保存摘要。
+    # 完整结果仍然通过 'results' 键传递给后续节点（如 DataAnalysis）。
+    
+    display_result = result_str
+    if len(result_str) > 1000:
+        display_result = result_str[:1000] + "\n... (结果过长已截断，完整结果用于后续分析)"
+        
     return {
         "results": result_str,
-        "messages": [AIMessage(content=f"查询结果:\n{result_str}")]
+        "messages": [AIMessage(content=f"查询结果:\n{display_result}")]
     }

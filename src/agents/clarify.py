@@ -48,7 +48,7 @@ def clarify_intent_node(state: AgentState, config: dict) -> dict:
     ]).partial(memory_context=memory_context)
     
     chain = prompt | llm
-    result = chain.invoke({"query": last_msg})
+    result = chain.invoke({"query": last_msg}, config=config)
     content = result.content.strip()
     
     if content == "CLEAR":

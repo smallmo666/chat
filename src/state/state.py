@@ -20,3 +20,13 @@ class AgentState(TypedDict):
     sql: Optional[str]
     results: Optional[str]
     intent_clear: bool
+    relevant_schema: Optional[str]
+    manual_selected_tables: Optional[list[str]]
+    
+    # Dynamic Planning Fields
+    plan: Optional[list[dict]] # List of steps [{"node": "...", "desc": "...", "status": "..."}]
+    current_step_index: int
+    
+    # Advanced Capabilities Fields
+    visualization: Optional[dict] # ECharts option JSON
+    analysis: Optional[str] # Markdown analysis result

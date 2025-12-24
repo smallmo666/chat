@@ -20,5 +20,7 @@ def get_llm():
         model=model_name,
         base_url=api_base,
         api_key=api_key,
-        temperature=0
+        temperature=0,
+        request_timeout=60, # Add timeout to prevent hanging
+        max_retries=2
     )

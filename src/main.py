@@ -18,6 +18,7 @@ from rich import box
 
 from src.graph import create_graph
 from src.utils.db import get_query_db, get_app_db
+from src.utils.callbacks import UIStreamingCallbackHandler
 
 console = Console()
 
@@ -74,15 +75,25 @@ async def main():
         
     app = create_graph()
     thread_id = str(uuid.uuid4())
-    # 增加递归限制，避免死循环错误
+    # 增加递归限制
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
     
     console.print(f"[dim]会话 ID: {thread_id}[/dim]")
     console.print(Panel("[bold yellow]欢迎使用 Text2SQL 助手！[/bold yellow]\n请输入您的查询，输入 'exit' 退出。", expand=False))
     
+    # Global state for thinking text (shared with callback)
+    thinking_state = {"text": ""}
+    
+    def update_thinking(text: str):
+        thinking_state["text"] = text
+
+    # Add callback to config
+    # Note: app.astream accepts config, and callbacks in config should propagate to models
+    config["callbacks"] = [UIStreamingCallbackHandler(update_thinking)]
+
     while True:
         try:
-            # Note: console.input is blocking, but that's fine for CLI loop
+            # Note: console.input is blocking
             user_input = await asyncio.to_thread(console.input, "\n[bold cyan]用户 > [/bold cyan]")
             user_input = user_input.strip()
             
@@ -100,13 +111,21 @@ async def main():
                 {"id": "ExecuteSQL", "name": "4. 执行查询", "status": "pending", "detail": ""},
             ]
             
-            current_thinking = ""
-            current_node = None
+            thinking_state["text"] = ""
             
             inputs = {"messages": [HumanMessage(content=user_input)]}
             
-            # Use Live display
-            with Live(create_ui_layout(plan_steps, current_thinking), refresh_per_second=10, console=console) as live:
+            # Start Live Display
+            # Use refresh_per_second=10 to auto-update based on current state
+            with Live(create_ui_layout(plan_steps, thinking_state["text"]), refresh_per_second=10, console=console) as live:
+                
+                # Background task to refresh UI continuously during stream
+                async def refresh_ui_loop():
+                    while True:
+                        live.update(create_ui_layout(plan_steps, thinking_state["text"]))
+                        await asyncio.sleep(0.1)
+
+                refresh_task = asyncio.create_task(refresh_ui_loop())
                 
                 def update_step(step_id, status, detail=""):
                     for step in plan_steps:
@@ -114,83 +133,61 @@ async def main():
                             step["status"] = status
                             if detail:
                                 step["detail"] = detail
-                
-                # Use astream_events to capture token streaming
-                async for event in app.astream_events(inputs, config=config, version="v1"):
-                    kind = event["event"]
-                    name = event["name"]
-                    data = event["data"]
-                    
-                    # 1. Handle Chain/Node Start/End to update plan status
-                    if kind == "on_chain_start":
-                        if name in ["ClarifyIntent", "GenerateDSL", "DSLtoSQL", "ExecuteSQL"]:
-                            current_node = name
-                            update_step(name, "running")
-                            # Clear thinking buffer for new step
-                            current_thinking = ""
-                            live.update(create_ui_layout(plan_steps, current_thinking))
+                    # Immediate update
+                    live.update(create_ui_layout(plan_steps, thinking_state["text"]))
+
+                try:
+                    # Use app.astream (standard) instead of astream_events
+                    async for output in app.astream(inputs, config=config):
+                        # output is a dict of {NodeName: StateUpdate}
+                        for node_name, state_update in output.items():
                             
-                    elif kind == "on_chain_end":
-                        # We handle completion logic based on outputs below, or generic completion here
-                        if name == "ClarifyIntent":
-                            # Check output to see if clarification needed
-                            output = data.get("output", {})
-                            if output and isinstance(output, dict):
-                                if output.get("intent_clear") is False:
-                                    update_step(name, "completed", "需要澄清")
+                            # Update Plan Status based on Node completion
+                            if node_name == "ClarifyIntent":
+                                intent_clear = state_update.get("intent_clear", False)
+                                if intent_clear:
+                                    update_step("ClarifyIntent", "completed", "意图清晰")
                                 else:
-                                    update_step(name, "completed", "意图清晰")
-                        
-                        elif name == "GenerateDSL":
-                            output = data.get("output", {})
-                            if output and isinstance(output, dict):
-                                dsl = output.get("dsl", "")
+                                    update_step("ClarifyIntent", "completed", "需要澄清")
+                                    # Handle clarification message
+                                    msgs = state_update.get("messages", [])
+                                    if msgs and isinstance(msgs[-1], AIMessage):
+                                        live.stop()
+                                        console.print(Panel(f"[bold yellow]Agent:[/bold yellow] {msgs[-1].content}", title="需确认"))
+                                        live.start()
+
+                            elif node_name == "GenerateDSL":
+                                update_step("ClarifyIntent", "completed", "意图清晰") # Ensure previous
+                                dsl = state_update.get("dsl", "")
                                 display_dsl = (dsl[:30] + '...') if len(dsl) > 30 else dsl
-                                update_step(name, "completed", display_dsl)
-                        
-                        elif name == "DSLtoSQL":
-                            output = data.get("output", {})
-                            if output and isinstance(output, dict):
-                                sql = output.get("sql", "")
-                                update_step(name, "completed", sql)
+                                update_step("GenerateDSL", "completed", display_dsl)
 
-                        elif name == "ExecuteSQL":
-                            update_step(name, "completed", "查询成功")
+                            elif node_name == "DSLtoSQL":
+                                update_step("GenerateDSL", "completed")
+                                sql = state_update.get("sql", "")
+                                update_step("DSLtoSQL", "completed", sql)
 
-                    # 2. Handle Streaming Tokens (Thinking Process)
-                    elif kind == "on_chat_model_stream":
-                        chunk = data.get("chunk")
-                        if chunk:
-                            content = chunk.content
-                            if content:
-                                current_thinking += content
-                                live.update(create_ui_layout(plan_steps, current_thinking))
-                    
-                    # 3. Handle Final Agent Responses (Clarification or Results)
-                    # We usually detect this via on_chain_end of the specific node, but extracting the full message
-                    # is easier if we look at the node output.
-                    
-                    # However, astream_events yields granular events. 
-                    # To print the final distinct message (like the table result or question), 
-                    # we can wait for the loop to finish, OR check `on_chain_end` for specific nodes.
-                    
-                    if kind == "on_chain_end" and name in ["ClarifyIntent", "ExecuteSQL"]:
-                        output = data.get("output", {})
-                        if output and isinstance(output, dict) and "messages" in output:
-                            last_msg = output["messages"][-1]
-                            if isinstance(last_msg, AIMessage):
-                                # If it's a clarification question
-                                if name == "ClarifyIntent" and output.get("intent_clear") is False:
-                                    live.stop()
-                                    console.print(Panel(f"[bold yellow]Agent:[/bold yellow] {last_msg.content}", title="需确认"))
-                                    live.start()
+                            elif node_name == "ExecuteSQL":
+                                update_step("DSLtoSQL", "completed")
+                                result = state_update.get("results", "执行完成")
+                                update_step("ExecuteSQL", "completed", "查询成功")
                                 
-                                # If it's a result
-                                if name == "ExecuteSQL":
+                                msgs = state_update.get("messages", [])
+                                if msgs and isinstance(msgs[-1], AIMessage):
                                     live.stop()
                                     console.print(f"\n[bold green]查询结果:[/bold green]")
-                                    console.print(last_msg.content)
+                                    console.print(msgs[-1].content)
                                     live.start()
+                            
+                            # Reset thinking text for next step (optional, or keep accumulating)
+                            thinking_state["text"] = ""
+                            
+                finally:
+                    refresh_task.cancel()
+                    try:
+                        await refresh_task
+                    except asyncio.CancelledError:
+                        pass
 
             console.print("-" * 50, style="dim")
             
@@ -199,6 +196,8 @@ async def main():
             break
         except Exception as e:
             console.print(f"[bold red]执行错误: {e}[/bold red]")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     asyncio.run(main())
