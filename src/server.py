@@ -107,11 +107,13 @@ async def event_generator(message: str, selected_tables: Optional[list[str]], th
             step_start_time = time.time()
             
             async for output in graph_app.astream(inputs, config=config):
+                print(f"DEBUG: Graph output keys: {list(output.keys())}")
                 step_end_time = time.time()
                 duration = round((step_end_time - step_start_time) * 1000) # ms
                 step_start_time = step_end_time # Reset for next step
                 
                 for node_name, state_update in output.items():
+                    print(f"DEBUG: Processing node output: {node_name}")
                     # Format state update event
                     event_data = {
                         "type": "step",
