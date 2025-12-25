@@ -84,7 +84,7 @@ class SchemaSearcher:
         
         # 选取前 50 个候选表（避免 Context Window 爆炸）
         # 如果分数都为0（无明确匹配），则保留核心表和部分随机表
-        # Strict limit to 30 to be safer
+        # 严格限制为 30 以更安全
         candidates = [t[1] for t in scored_tables[:30]]
         
         # 如果候选太少，补充一些核心表
@@ -124,13 +124,13 @@ class SchemaSearcher:
             selected_tables = [t.strip() for t in selected_tables_str.split(",") if t.strip()]
         except Exception as e:
             print(f"Schema search error: {e}")
-            # Fallback to core tables
+            # 回退到核心表
             selected_tables = ["users", "orders", "products"]
 
         # 3. 获取详细 Schema
         relevant_schema_info = []
         total_chars = 0
-        MAX_SCHEMA_CHARS = 10000 # Limit to ~10k chars to leave room for history and output
+        MAX_SCHEMA_CHARS = 10000 # 限制在 ~10k 字符以留出空间给历史和输出
         
         for table in selected_tables:
             if table in full_schema:

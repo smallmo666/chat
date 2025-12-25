@@ -12,20 +12,20 @@ def select_tables_node(state: AgentState, config: dict) -> dict:
     searcher = get_schema_searcher()
 
     if manual_tables and len(manual_tables) > 0:
-        # User explicitly selected tables.
-        # We need to fetch the schema for these specific tables.
+        # 用户显式选择了表。
+        # 我们需要获取这些特定表的 Schema。
         
-        # Limit the number of manual tables to avoid blowing up context
+        # 限制手动表的数量以避免 Context 爆炸
         if len(manual_tables) > 20:
             manual_tables = manual_tables[:20]
             print(f"Warning: Too many manual tables selected. Truncating to top 20.")
             
-        # Construct schema string manually from cache for now to keep it simple
+        # 暂时从缓存手动构建 Schema 字符串以保持简单
         full_schema = searcher._get_schema()
         relevant_schema_info = []
         for table in manual_tables:
             if table in full_schema:
-                # Handle both dict and list format from legacy
+                # 处理旧版格式的 dict 和 list
                 info = full_schema[table]
                 columns = info if isinstance(info, list) else info.get("columns", [])
                 
@@ -39,7 +39,7 @@ def select_tables_node(state: AgentState, config: dict) -> dict:
                 relevant_schema_info.append(f"{header}\n列: {', '.join(col_strings)}")
         
         if not relevant_schema_info:
-             # Fallback if manual tables not found (rare)
+             # 如果未找到手动表（罕见），则回退
              schema_info = "User selected tables not found in schema."
         else:
              schema_info = "\n\n".join(relevant_schema_info)

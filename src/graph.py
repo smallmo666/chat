@@ -79,7 +79,7 @@ def create_graph():
             port=redis_port,
             password=redis_password,
             db=0,
-            decode_responses=False # pickle serialization usually needs bytes
+            decode_responses=False # pickle 序列化通常需要 bytes
         )
         # 使用自定义的 SimpleRedisSaver，不需要 RedisJSON 模块支持
         checkpointer = SimpleRedisSaver(conn=redis_conn)

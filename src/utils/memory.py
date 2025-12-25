@@ -1,8 +1,13 @@
 import os
-from mem0 import Memory
 from dotenv import load_dotenv
 
+# 加载环境变量
 load_dotenv()
+
+# 禁用 Mem0 遥测 (PostHog)，防止退出时报错
+os.environ["MEM0_TELEMETRY"] = "False"
+
+from mem0 import Memory
 
 class LongTermMemory:
     """
@@ -27,6 +32,14 @@ class LongTermMemory:
                 "config": {
                     "model": os.getenv("MODEL_NAME", "qwen-max"),
                     "temperature": 0,
+                    "openai_base_url": os.getenv("OPENAI_API_BASE"),
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                }
+            },
+            "embedder": {
+                "provider": "openai",
+                "config": {
+                    "model": "text-embedding-v2",
                     "openai_base_url": os.getenv("OPENAI_API_BASE"),
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 }

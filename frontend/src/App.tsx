@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Layout, Input, Button, Card, Steps, Typography, List, Splitter, Tag, ConfigProvider, theme, Tree, Collapse } from 'antd';
+import { Layout, Input, Button, Card, Steps, Typography, List, Splitter, Tag, ConfigProvider, theme, Tree, Collapse, Table } from 'antd';
 import { SendOutlined, RobotOutlined, UserOutlined, LoadingOutlined, CheckCircleOutlined, SyncOutlined, ClockCircleOutlined, TableOutlined, SearchOutlined, ColumnHeightOutlined, BarChartOutlined, FileTextOutlined, CaretRightOutlined } from '@ant-design/icons';
 import { Brain, Database, Activity } from 'lucide-react';
 import ReactECharts from 'echarts-for-react';
@@ -106,6 +106,7 @@ const App: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([
     { id: 'init', title: '等待输入...', status: 'pending' }
   ]);
+  const [threadId, setThreadId] = useState<string>('');
 
   // Schema Browser State
   const [dbTables, setDbTables] = useState<TableSchema[]>([]);
@@ -119,6 +120,10 @@ const App: React.FC = () => {
   // const thinkingEndRef = useRef<HTMLDivElement>(null); // Removed
 
   useEffect(() => {
+      // Generate Thread ID on mount
+      const tid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      setThreadId(tid);
+
       // Fetch table list on mount
       fetch('http://localhost:8000/tables')
         .then(res => res.json())
@@ -143,7 +148,7 @@ const App: React.FC = () => {
         .map(t => {
             return {
                 title: (
-                    <span style={{fontSize: 13}}>
+                    <span style={{fontSize: 14}}>
                         <span style={{fontWeight: 500}}>{t.name}</span>
                         {t.comment && <span style={{color: '#888', marginLeft: 6}}>({t.comment})</span>}
                     </span>
@@ -152,7 +157,7 @@ const App: React.FC = () => {
                 icon: <TableOutlined />,
                 children: t.columns.map(col => ({
                     title: (
-                        <span style={{fontSize: 12, color: '#555'}}>
+                        <span style={{fontSize: 13, color: '#555'}}>
                             <span style={{color: '#1677ff'}}>{col.name}</span>
                             <span style={{color: '#999', margin: '0 4px'}}>{col.type}</span>
                             {col.comment && <span style={{color: '#666'}}>- {col.comment}</span>}
@@ -160,7 +165,7 @@ const App: React.FC = () => {
                     ),
                     key: `${t.name}.${col.name}`,
                     isLeaf: true,
-                    icon: <ColumnHeightOutlined style={{fontSize: 10}} />
+                    icon: <ColumnHeightOutlined style={{fontSize: 11}} />
                 }))
             };
         });
@@ -213,7 +218,8 @@ const App: React.FC = () => {
         },
         body: JSON.stringify({ 
             message: userMsg,
-            selected_tables: selectedTables.length > 0 ? selectedTables : undefined
+            selected_tables: selectedTables.length > 0 ? selectedTables : undefined,
+            thread_id: threadId
         }),
       });
 
@@ -225,7 +231,11 @@ const App: React.FC = () => {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+            // Ensure loading state is cleared when stream ends
+            setIsLoading(false);
+            break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         
@@ -266,7 +276,7 @@ const App: React.FC = () => {
                 const newTasks: TaskItem[] = data.content.map((step: any, index: number) => ({
                     id: step.node,
                     title: step.desc, // Use description as title
-                    status: index === 0 ? 'process' : 'wait',
+                    status: index === 0 ? 'process' : 'pending',
                     description: index === 0 ? <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag> : '等待中',
                     logs: []
                 }));
@@ -303,13 +313,65 @@ const App: React.FC = () => {
                   setMessages(prev => [...prev, { role: 'agent', content: markdownContent }]);
               }
               else if (eventType === 'visualization') {
-                  // Render ECharts
-                  const chartContent = (
-                      <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><BarChartOutlined style={{marginRight:6}}/> 可视化图表</span>} style={{marginTop: 8, height: 400}}>
-                          <ReactECharts option={data.content} style={{height: '100%', width: '100%'}} />
-                      </Card>
-                  );
-                  setMessages(prev => [...prev, { role: 'agent', content: chartContent }]);
+                  const vizData = data.content;
+                  let vizContent = null;
+                  
+                  if (vizData.chart_type === 'table' && vizData.table_data) {
+                      // Render Ant Design Table
+                      const { columns, data: tableData } = vizData.table_data;
+                      
+                      // Auto-generate columns definition
+                      const tableColumns = columns.map((col: string) => ({
+                          title: col,
+                          dataIndex: col,
+                          key: col,
+                          render: (text: any) => <span style={{fontSize: 13}}>{text}</span>
+                      }));
+                      
+                      vizContent = (
+                          <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><TableOutlined style={{marginRight:6}}/> 数据清单</span>} style={{marginTop: 8, overflow: 'hidden'}}>
+                              <Table 
+                                dataSource={tableData} 
+                                columns={tableColumns} 
+                                size="small" 
+                                pagination={{ pageSize: 5, size: 'small' }}
+                                scroll={{ x: 'max-content' }}
+                                rowKey={(record, index) => index?.toString() || ''}
+                              />
+                          </Card>
+                      );
+                  } else {
+                      // Render ECharts (Default)
+                      const option = vizData.option || vizData;
+                      
+                      vizContent = (
+                          <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><BarChartOutlined style={{marginRight:6}}/> 可视化图表</span>} style={{marginTop: 8}}>
+                              <ReactECharts option={option} style={{height: 500, width: '100%'}} theme="macarons" />
+                          </Card>
+                      );
+                  }
+                  
+                  if (vizContent) {
+                      setMessages(prev => {
+                          const newMsgs = [...prev];
+                          const lastMsg = newMsgs[newMsgs.length - 1];
+                          // If last message is an empty placeholder (no content, no thinking), replace it
+                          // This happens when ExecuteSQL sends visualization without prior thinking
+                          if (lastMsg && lastMsg.role === 'agent' && !lastMsg.content && !lastMsg.thinking) {
+                              newMsgs[newMsgs.length - 1] = {
+                                  ...lastMsg,
+                                  content: vizContent
+                              };
+                          } else {
+                              // Otherwise append as new message
+                              newMsgs.push({ role: 'agent', content: vizContent });
+                          }
+                          return newMsgs;
+                      });
+                  }
+                  
+                  // Ensure loading state is cleared when visualization is received
+                  setIsLoading(false);
               }
               else if (eventType === 'selected_tables') {
                  // Agent auto-selected tables, update UI checkboxes
@@ -320,6 +382,7 @@ const App: React.FC = () => {
               }
               else if (eventType === 'error') {
                  setMessages(prev => [...prev, { role: 'agent', content: `Error: ${data.content}` }]);
+                 setIsLoading(false);
               }
             } catch (e) {
               console.error("Failed to parse SSE data", e);
@@ -339,15 +402,18 @@ const App: React.FC = () => {
     setTasks(prev => {
       const newTasks = [...prev];
       
-      // Find the currently processing task
-      const taskIndex = currentStep;
+      // Find task by ID (Case sensitive match with backend node name)
+      // Backend node names: "Planner", "Supervisor", "ClarifyIntent", "SelectTables", "GenerateDSL", "DSLtoSQL", "ExecuteSQL", "DataAnalysis", "Visualization", "TableQA"
+      const taskIndex = newTasks.findIndex(t => t.id === node);
       
-      if (taskIndex < newTasks.length) {
+      if (taskIndex !== -1) {
+          // Format details
           let desc: React.ReactNode = details || '完成';
           if (details && details.length > 50) {
             desc = <Tag color="blue" style={{whiteSpace: 'normal', wordBreak: 'break-all'}}>{details}</Tag>;
           }
           
+          // Update current task status
           newTasks[taskIndex] = {
               ...newTasks[taskIndex],
               status: 'finish',
@@ -355,12 +421,18 @@ const App: React.FC = () => {
               duration: duration
           };
           
-          // Move to next
+          // Trigger next task if available
           if (taskIndex + 1 < newTasks.length) {
-              newTasks[taskIndex + 1].status = 'process';
-              newTasks[taskIndex + 1].description = <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag>;
-              setCurrentStep(prev => prev + 1);
+              // Only start next task if it's currently 'wait'
+              if (newTasks[taskIndex + 1].status === 'pending') {
+                  newTasks[taskIndex + 1].status = 'process';
+                  newTasks[taskIndex + 1].description = <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag>;
+                  // We don't rely on currentStep state anymore for rendering, just for logic if needed
+                  setCurrentStep(taskIndex + 1);
+              }
           }
+      } else {
+          console.warn(`Step event for unknown node: ${node}`);
       }
       return newTasks;
     });
@@ -408,7 +480,7 @@ const App: React.FC = () => {
                         allowClear
                     />
                  </div>
-                 <div style={{flex: 1, overflowY: 'auto', padding: '0 8px'}}>
+                 <div style={{flex: 1, overflow: 'auto', padding: '0 8px'}}>
                     <DirectoryTree
                         checkable
                         multiple
@@ -457,14 +529,15 @@ const App: React.FC = () => {
                                               justifyContent: item.role === 'user' ? 'flex-end' : 'flex-start' 
                                           }}>
                                               <div style={{ 
-                                                  maxWidth: '95%', 
+                                                  maxWidth: item.role === 'user' ? '80%' : '100%', 
                                                   padding: '10px 14px', 
                                                   borderRadius: item.role === 'user' ? '8px 8px 2px 8px' : '8px 8px 8px 2px',
                                                   background: item.role === 'user' ? '#1677ff' : '#f5f5f5',
                                                   color: item.role === 'user' ? 'white' : 'rgba(0,0,0,0.88)',
                                                   boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                                                   fontSize: '14px',
-                                                  lineHeight: 1.6
+                                                  lineHeight: 1.6,
+                                                  overflow: 'hidden' // Ensure content like charts doesn't overflow bubble
                                               }}>
                                                   {item.role === 'agent' && (
                                                       <div style={{display: 'flex', alignItems: 'center', marginBottom: 4, opacity: 0.7, fontSize: 12}}>

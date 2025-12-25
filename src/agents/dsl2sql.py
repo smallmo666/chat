@@ -42,7 +42,7 @@ def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         
         chain = prompt | llm
         
-        # Pass config to invoke to propagate callbacks
+        # 传递 config 给 invoke 以传播回调
         invoke_args = {"dsl": dsl}
         print("DEBUG: Invoking LLM for SQL generation...")
         if config:

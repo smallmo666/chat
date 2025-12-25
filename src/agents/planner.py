@@ -34,19 +34,25 @@ system_prompt = (
     "2. 仅查询数据：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL\n"
     "3. 询问表信息：TableQA\n"
     "4. 意图不明：ClarifyIntent\n"
-    "5. 后续深入分析（已有结果）：DataAnalysis -> Visualization\n\n"
+    "5. 后续深入分析（已有结果）：DataAnalysis -> Visualization\n"
+    "6. 询问表结构/有哪些表：TableQA\n"
+    "7. 对当前数据进行绘图/可视化：Visualization\n\n"
+    "注意：\n"
+    "- 如果用户要求“绘制”、“画图”、“可视化”且上下文中有查询结果，请直接使用 Visualization，不要使用 TableQA。\n"
+    "- “清单表”通常指的是之前的查询结果，如果用户说“绘制清单表”，意图是 Visualization。\n"
+    "- 只有明确询问“数据库里有什么表”、“表的结构是什么”时，才使用 TableQA。\n\n"
     "请生成一个 JSON 列表，包含步骤的 node 和 desc。"
 )
 
 def planner_node(state: AgentState) -> dict:
-    # Check if we already have a plan and are in the middle of it
-    # But wait, Planner is usually the entry point or re-entry after clarification
-    # For simplicity, we regenerate plan if it's empty or if we just finished ClarifyIntent
+    # 检查我们是否已经有计划并且正在执行中
+    # 但是等等，Planner 通常是入口点或澄清后的重新入口
+    # 为了简单起见，如果计划为空或我们刚刚完成 ClarifyIntent，我们会重新生成计划
     
     messages = state.get("messages", [])
     
-    # Truncate history to avoid token overflow
-    # Keep last 10 messages should be enough for planning
+    # 截断历史记录以避免 Token 溢出
+    # 保留最后 10 条消息应该足够用于规划
     if len(messages) > 10:
         messages = messages[-10:]
     
@@ -58,11 +64,11 @@ def planner_node(state: AgentState) -> dict:
     chain = prompt | llm.with_structured_output(PlannerResponse)
     result = chain.invoke({"messages": messages})
     
-    # Convert Pydantic models to dicts for state
+    # 将 Pydantic 模型转换为字典以用于状态
     plan = [{"node": step.node, "desc": step.desc, "status": "wait"} for step in result.plan]
     
     return {
         "plan": plan, 
         "current_step_index": 0,
-        "intent_clear": True # Assuming planner handles clarity check via ClarifyIntent node
+        "intent_clear": True # 假设规划器通过 ClarifyIntent 节点处理清晰度检查
     }

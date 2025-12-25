@@ -2,8 +2,8 @@ from src.state.state import AgentState
 
 def supervisor_node(state: AgentState) -> dict:
     """
-    Supervisor Node (Dispatcher).
-    Reads the 'plan' from state and 'current_step_index' to determine the next node.
+    监督者节点（调度器）。
+    从状态中读取 'plan' 和 'current_step_index' 以确定下一个节点。
     """
     print("DEBUG: Entering supervisor_node")
     try:
@@ -12,12 +12,12 @@ def supervisor_node(state: AgentState) -> dict:
         
         print(f"DEBUG: Supervisor - Plan len: {len(plan)}, Current Index: {current_index}")
         
-        # If no plan or finished all steps, END
+        # 如果没有计划或已完成所有步骤，则结束
         if not plan or current_index >= len(plan):
             print("DEBUG: Supervisor - Plan finished or empty -> FINISH")
             return {"next": "FINISH"}
         
-        # Get next step node name
+        # 获取下一步节点名称
         next_node = plan[current_index]["node"]
         print(f"DEBUG: Supervisor - Next node: {next_node}")
         
@@ -29,4 +29,4 @@ def supervisor_node(state: AgentState) -> dict:
         print(f"ERROR in supervisor_node: {e}")
         import traceback
         traceback.print_exc()
-        return {"next": "FINISH"} # Fail safe
+        return {"next": "FINISH"} # 故障安全

@@ -11,7 +11,7 @@ def analysis_node(state: AgentState) -> dict:
     数据分析节点。
     根据 SQL 执行结果和用户查询，生成数据解读和洞察。
     """
-    query = state["messages"][-1].content # Ideally find the last human message
+    query = state["messages"][-1].content # 理想情况下找到最后一条用户消息
     for msg in reversed(state["messages"]):
         if msg.type == "human":
             query = msg.content
@@ -35,7 +35,7 @@ def analysis_node(state: AgentState) -> dict:
     response = chain.invoke({
         "query": query,
         "sql": sql,
-        "results": results[:5000] # Truncate if too long
+        "results": results[:5000] # 如果太长则截断
     })
     
     return {"analysis": response.content}

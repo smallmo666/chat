@@ -49,14 +49,14 @@ class QueryDatabase:
             conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
             conn.commit()
 
-            # 2. Define 100 Business Scenarios (Domains)
-            # Format: (prefix, domain_name, [list of entity templates])
+            # 2. 定义 100 个业务场景（领域）
+            # 格式: (prefix, domain_name, [list of entity templates])
             domains = []
             
-            # Common entities templates (simplified for bulk generation)
-            # We will use these to construct domain-specific tables
+            # 通用实体模板（简化用于批量生成）
+            # 我们将使用这些来构建特定领域的表
             entities = [
-                ("users", "用户", "id INT PRIMARY KEY, name VARCHAR(50) COMMENT '姓名', email VARCHAR(100) COMMENT '邮箱', role VARCHAR(20) COMMENT '角色'"),
+                ("users", "用户", "id INT PRIMARY KEY, name VARCHAR(50) COMMENT '姓名', email VARCHAR(100) COMMENT '邮箱', role VARCHAR(20) COMMENT '角色', age INT COMMENT '年龄'"),
                 ("orders", "订单", "id INT PRIMARY KEY, user_id INT COMMENT '用户ID', amount DECIMAL(10,2) COMMENT '金额', status VARCHAR(20) COMMENT '状态'"),
                 ("items", "明细", "id INT PRIMARY KEY, order_id INT COMMENT '订单ID', product_id INT COMMENT '产品ID', qty INT COMMENT '数量'"),
                 ("logs", "日志", "id INT PRIMARY KEY, action VARCHAR(50) COMMENT '操作', created_at DATETIME COMMENT '时间'"),
@@ -68,7 +68,7 @@ class QueryDatabase:
                 ("tasks", "任务", "id INT PRIMARY KEY, title VARCHAR(100) COMMENT '标题', assignee_id INT COMMENT '执行人', due_date DATE COMMENT '截止日期'")
             ]
             
-            # Generate 100 domains
+            # 生成 100 个领域
             categories = [
                 ("hr", "人力资源"), ("crm", "客户关系"), ("fin", "财务管理"), ("scm", "供应链"), 
                 ("mfg", "制造生产"), ("edu", "教育培训"), ("med", "医疗健康"), ("gov", "政务管理"),
@@ -79,25 +79,25 @@ class QueryDatabase:
             
             count = 0
             for cat_prefix, cat_name in categories:
-                for i in range(1, 6): # 5 sub-domains per category = 100 domains total
+                for i in range(1, 6): # 每个类别 5 个子域 = 总共 100 个领域
                     domain_code = f"{cat_prefix}{i}"
                     domain_label = f"{cat_name}子域{i}"
                     
-                    # For each domain, create 10 tables based on templates but with domain prefix
+                    # 对于每个领域，基于模板创建 10 个表，但带有领域前缀
                     for entity_code, entity_label, columns in entities:
                         table_name = f"{domain_code}_{entity_code}"
                         table_comment = f"{domain_label}-{entity_label}表"
                         
-                        # Add domain specific columns to make it diverse
+                        # 添加领域特定列以使其多样化
                         extra_col = f"domain_specific_{i} VARCHAR(50) COMMENT '域特定字段'"
                         sql = f"CREATE TABLE {table_name} ({columns}, {extra_col})"
                         
                         try:
                             conn.execute(text(f"{sql} COMMENT='{table_comment}'"))
                             
-                            # Insert dummy data
+                            # 插入虚拟数据
                             if "users" in entity_code:
-                                conn.execute(text(f"INSERT INTO {table_name} (id, name, email, role, domain_specific_{i}) VALUES (1, 'User1', 'u1@test.com', 'admin', 'data')"))
+                                conn.execute(text(f"INSERT INTO {table_name} (id, name, email, role, age, domain_specific_{i}) VALUES (1, 'User1', 'u1@test.com', 'admin', 25, 'data')"))
                             elif "orders" in entity_code:
                                 conn.execute(text(f"INSERT INTO {table_name} (id, user_id, amount, status, domain_specific_{i}) VALUES (1, 1, 100.00, 'pending', 'data')"))
                                 
@@ -117,7 +117,7 @@ class QueryDatabase:
         inspector = inspect(self.engine)
         existing_tables = inspector.get_table_names()
         
-        # Check if we already have a significant number of tables
+        # 检查我们是否已经有大量的表
         if len(existing_tables) >= 1000:
             print(f"QueryDB: 检测到已有 {len(existing_tables)} 张表，跳过数据生成。")
             return
@@ -126,7 +126,7 @@ class QueryDatabase:
         
         with self.engine.connect() as conn:
             
-            # Helper to create tables
+            # 创建表的辅助函数
             def create_table_safe(name, sql, comment):
                 if name in existing_tables:
                     return
@@ -136,11 +136,11 @@ class QueryDatabase:
                     print(f"Failed to create {name}: {e}")
 
             # ==========================================
-            # 1. E-Commerce Core (20 tables)
+            # 1. 电子商务核心（20 个表）
             # ==========================================
-            # Users, Products, Orders are already there usually, but let's define extensions
+            # 用户、产品、订单通常已经存在，但让我们定义扩展
             
-            # Ensure Core Base
+            # 确保核心基础
             if "users" not in existing_tables:
                 create_table_safe("users", """
                     CREATE TABLE users (
@@ -151,7 +151,7 @@ class QueryDatabase:
                         joined_year INT COMMENT '注册年份',
                         status VARCHAR(50) COMMENT '状态'
                     )""", "用户信息表")
-                # Insert dummy
+                # 插入虚拟数据
                 try:
                      for i in range(50):
                          conn.execute(text("INSERT INTO users (name, email, age, joined_year, status) VALUES (:name, :email, :age, :year, :status)"), 
@@ -191,7 +191,7 @@ class QueryDatabase:
                                          {"uid": random.choice(user_ids), "amt": 50.0 + (i%100), "status": "completed"})
                 except: pass
 
-            # Extended E-commerce
+            # 扩展电子商务
             create_table_safe("ec_carts", """
                 CREATE TABLE ec_carts (
                     id INT AUTO_INCREMENT PRIMARY KEY COMMENT '购物车ID',
@@ -226,9 +226,9 @@ class QueryDatabase:
                 )""", "商品评价表")
 
             # ==========================================
-            # 2. HR Domain (Human Resources) - ~150 tables
+            # 2. HR 领域（人力资源） - ~150 个表
             # ==========================================
-            # Core HR
+            # 核心 HR
             create_table_safe("hr_employees", """
                 CREATE TABLE hr_employees (
                     id INT AUTO_INCREMENT PRIMARY KEY COMMENT '员工ID',
@@ -249,7 +249,7 @@ class QueryDatabase:
                     location_id INT COMMENT '地点ID'
                 )""", "部门表")
 
-            # Payroll & Attendance for different years/regions
+            # 不同年份/地区的薪资和考勤
             years = range(2020, 2025)
             regions = ['cn', 'us', 'eu', 'sg', 'jp']
             
@@ -278,7 +278,7 @@ class QueryDatabase:
                         f"{year}年{month}月考勤记录")
 
             # ==========================================
-            # 3. CRM Domain (Sales & Customers) - ~150 tables
+            # 3. CRM 领域（销售和客户） - ~150 个表
             # ==========================================
             create_table_safe("crm_leads", """
                 CREATE TABLE crm_leads (
@@ -299,7 +299,7 @@ class QueryDatabase:
                     close_date DATE COMMENT '预计成交日期'
                 )""", "商机表")
 
-            # Region-based customer data
+            # 基于区域的客户数据
             for region in regions:
                 create_table_safe(f"crm_customers_{region}", """
                     CREATE TABLE crm_customers_dummy (
@@ -311,7 +311,7 @@ class QueryDatabase:
                     )""".replace('crm_customers_dummy', f"crm_customers_{region}"),
                     f"{region.upper()}地区客户表")
                 
-                # Activities per region
+                # 每个区域的活动
                 create_table_safe(f"crm_activities_{region}", """
                     CREATE TABLE crm_activities_dummy (
                         id INT AUTO_INCREMENT PRIMARY KEY COMMENT '活动ID',
@@ -323,18 +323,19 @@ class QueryDatabase:
                     f"{region.upper()}地区客户活动记录")
 
             # ==========================================
-            # 4. Finance Domain (Accounting) - ~200 tables
+            # 4. 财务领域（会计） - ~200 个表
             # ==========================================
-            create_table_safe("fin_gl_accounts", """
-                CREATE TABLE fin_gl_accounts (
-                    code VARCHAR(20) PRIMARY KEY COMMENT '科目代码',
-                    name VARCHAR(100) COMMENT '科目名称',
-                    type VARCHAR(20) COMMENT '科目类型'
-                )""", "总账科目表")
-
-            # Monthly Journals and Ledgers
+            create_table_safe("fin_accounts", """
+                CREATE TABLE fin_accounts (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    code VARCHAR(50) COMMENT '科目代码',
+                    name VARCHAR(255) COMMENT '科目名称'
+                )""", "会计科目表")
+            
+            # 月度日记账和分类账
             for year in years:
                 for month in range(1, 13):
+                    period = f"{year}_{month:02d}"
                     create_table_safe(f"fin_journal_{year}_{month:02d}", """
                         CREATE TABLE fin_journal_dummy (
                             id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '凭证ID',
@@ -365,82 +366,40 @@ class QueryDatabase:
                         f"{year}年{month}月费用报销单")
 
             # ==========================================
-            # 5. Supply Chain (SCM) - ~150 tables
+            # 5. 供应链 (SCM) - ~150 个表
             # ==========================================
-            create_table_safe("scm_suppliers", """
-                CREATE TABLE scm_suppliers (
-                    id INT AUTO_INCREMENT PRIMARY KEY COMMENT '供应商ID',
-                    name VARCHAR(100) COMMENT '供应商名称',
-                    contact_person VARCHAR(50) COMMENT '联系人',
-                    phone VARCHAR(20) COMMENT '电话'
+            create_table_safe("scm_vendors", """
+                CREATE TABLE scm_vendors (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255)
                 )""", "供应商表")
-
-            # Warehouses inventory
-            warehouses = [f"wh_{r}_{i}" for r in regions for i in range(1, 6)] # 25 warehouses
-            for wh in warehouses:
-                create_table_safe(f"scm_inventory_{wh}", """
-                    CREATE TABLE scm_inventory_dummy (
-                        id INT AUTO_INCREMENT PRIMARY KEY COMMENT '记录ID',
-                        sku VARCHAR(50) COMMENT 'SKU',
-                        qty_on_hand INT COMMENT '现有库存',
-                        qty_allocated INT COMMENT '已分配',
-                        bin_location VARCHAR(20) COMMENT '货位'
-                    )""".replace('scm_inventory_dummy', f"scm_inventory_{wh}"),
-                    f"仓库{wh}库存快照")
                 
-                create_table_safe(f"scm_moves_{wh}", """
-                    CREATE TABLE scm_moves_dummy (
-                        id INT AUTO_INCREMENT PRIMARY KEY COMMENT '移库单ID',
-                        sku VARCHAR(50) COMMENT 'SKU',
-                        from_bin VARCHAR(20) COMMENT '原货位',
-                        to_bin VARCHAR(20) COMMENT '目标货位',
-                        qty INT COMMENT '数量',
-                        moved_at DATETIME COMMENT '移动时间'
-                    )""".replace('scm_moves_dummy', f"scm_moves_{wh}"),
-                    f"仓库{wh}移库记录")
+            # 仓库库存
+            # 25 个仓库
+            for w in range(1, 26):
+                create_table_safe(f"scm_inventory_wh_{w}", """
+                    CREATE TABLE scm_inventory (
+                        product_id INT,
+                        quantity INT,
+                        location VARCHAR(50)
+                    )""", f"仓库 {w} 库存表")
 
             # ==========================================
-            # 6. Project Management (PM) - ~100 tables
+            # 6. 项目管理 (PM) - ~100 个表
             # ==========================================
-            project_types = ['internal', 'external', 'rnd', 'marketing']
-            for p_type in project_types:
-                create_table_safe(f"pm_projects_{p_type}", """
-                    CREATE TABLE pm_projects_dummy (
-                        id INT AUTO_INCREMENT PRIMARY KEY COMMENT '项目ID',
-                        name VARCHAR(100) COMMENT '项目名称',
-                        manager_id INT COMMENT '负责人ID',
-                        start_date DATE COMMENT '开始日期',
-                        end_date DATE COMMENT '结束日期',
-                        status VARCHAR(20) COMMENT '状态'
-                    )""".replace('pm_projects_dummy', f"pm_projects_{p_type}"),
-                    f"{p_type.upper()}类项目表")
-                
-                create_table_safe(f"pm_tasks_{p_type}", """
-                    CREATE TABLE pm_tasks_dummy (
-                        id INT AUTO_INCREMENT PRIMARY KEY COMMENT '任务ID',
-                        project_id INT COMMENT '项目ID',
-                        title VARCHAR(100) COMMENT '任务标题',
-                        assignee_id INT COMMENT '执行人ID',
-                        priority VARCHAR(10) COMMENT '优先级',
-                        due_date DATE COMMENT '截止日期'
-                    )""".replace('pm_tasks_dummy', f"pm_tasks_{p_type}"),
-                    f"{p_type.upper()}类项目任务表")
-                
-                create_table_safe(f"pm_issues_{p_type}", """
-                    CREATE TABLE pm_issues_dummy (
-                        id INT AUTO_INCREMENT PRIMARY KEY COMMENT '问题ID',
-                        project_id INT COMMENT '项目ID',
-                        title VARCHAR(100) COMMENT '问题标题',
-                        severity VARCHAR(10) COMMENT '严重程度',
-                        status VARCHAR(20) COMMENT '状态'
-                    )""".replace('pm_issues_dummy', f"pm_issues_{p_type}"),
-                    f"{p_type.upper()}类项目问题记录")
+            for i in range(1, 101):
+                create_table_safe(f"pm_project_{i}_tasks", """
+                    CREATE TABLE pm_tasks (
+                        id INT PRIMARY KEY,
+                        name VARCHAR(255),
+                        status VARCHAR(50)
+                    )""", f"项目 {i} 任务表")
 
             # ==========================================
-            # 7. CMS (Content Management) - ~50 tables
+            # 7. CMS (内容管理) - ~50 个表
             # ==========================================
-            sites = ['blog', 'corp', 'shop', 'support', 'internal']
-            for site in sites:
+            cms_modules = ['news', 'blogs', 'videos', 'images', 'comments', 'tags', 'categories', 'users', 'logs', 'settings']
+            for mod in cms_modules:
                 create_table_safe(f"cms_posts_{site}", """
                     CREATE TABLE cms_posts_dummy (
                         id INT AUTO_INCREMENT PRIMARY KEY COMMENT '文章ID',
@@ -462,79 +421,75 @@ class QueryDatabase:
                     f"{site}站点评论表")
 
             # ==========================================
-            # 8. Misc & Logs (Remaining to reach 1000)
+            # 8. 杂项和日志（剩余以达到 1000）
             # ==========================================
-            current_count = len(inspector.get_table_names())
-            needed = 1000 - current_count
-            if needed > 0:
-                print(f"Filling remaining {needed} tables with system logs...")
-                # Simulate microservice logs
-                services = ['auth', 'payment', 'search', 'recommend', 'notification', 'email', 'sms', 'push', 'analytics', 'reporting']
+            current_count = len(existing_tables)
+            remaining = 1000 - current_count
+            
+            # 模拟微服务日志
+            if remaining > 0:
+                print(f"Generating {remaining} log tables to reach 1000...")
+                services = ['auth', 'payment', 'search', 'recommend', 'notification', 'user', 'order', 'inventory']
+                # 每个服务 20 个日志分片
                 for svc in services:
-                    for i in range(20): # 20 log shards per service
-                        t_name = f"sys_logs_{svc}_{i:03d}"
-                        if needed <= 0: break
+                    for shard in range(1, 21):
+                        t_name = f"logs_{svc}_{shard}"
                         create_table_safe(t_name, """
-                            CREATE TABLE sys_logs_dummy (
-                                id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '日志ID',
-                                trace_id VARCHAR(64) COMMENT 'TraceID',
-                                level VARCHAR(10) COMMENT '级别',
-                                message TEXT COMMENT '日志内容',
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '时间'
-                            )""".replace('sys_logs_dummy', t_name),
-                            f"{svc}服务日志分片_{i}")
-                        needed -= 1
-
-            conn.commit()
-        print("QueryDB: 演示数据生成完成。")
+                            CREATE TABLE log_dummy (
+                                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                level VARCHAR(10),
+                                message TEXT,
+                                created_at DATETIME
+                            )""", f"{svc} 服务日志分片 {shard}")
+        
+        print("QueryDB: 数据生成完成。")
 
     def inspect_schema(self) -> str:
         """
-        从 querydb 获取实时的 Schema 信息，包括列注释。
+        批量检查
         """
         inspector = inspect(self.engine)
-        table_names = inspector.get_table_names()
+        schema_info = {}
         
-        schema_data = {}
+        all_tables = inspector.get_table_names()
         
-        # Batch inspection
-        for table in table_names:
+        for table_name in all_tables:
+            # 获取带有注释的列
+            columns = inspector.get_columns(table_name)
+            # 获取表注释
             try:
-                # Get columns with comments
-                columns = inspector.get_columns(table)
-                # Get table comment
-                table_comment = inspector.get_table_comment(table).get('text')
+                table_comment = inspector.get_table_comment(table_name)
+                # 如果可用，Inspect 返回注释
+                comment_text = table_comment.get('text', '') if table_comment else ""
+            except:
+                comment_text = ""
                 
-                col_defs = []
-                for col in columns:
-                    col_info = {
-                        "name": col['name'], 
-                        "type": str(col['type']),
-                        "comment": col.get('comment') # Inspect returns comment if available
-                    }
-                    col_defs.append(col_info)
-                
-                schema_data[table] = {
-                    "comment": table_comment,
-                    "columns": col_defs
-                }
-            except Exception as e:
-                print(f"Error inspecting {table}: {e}")
-                
-        return json.dumps(schema_data)
+            schema_info[table_name] = {
+                "columns": [{"name": col["name"], "type": str(col["type"]), "comment": col.get("comment", "")} for col in columns],
+                "comment": comment_text
+            }
+            
+        return json.dumps(schema_info, ensure_ascii=False)
 
     def run_query(self, query: str) -> str:
         """
         在 querydb 上执行 SQL 查询。
         """
         try:
+            # 使用显式连接管理，确保事务边界
             with self.engine.connect() as conn:
-                df = pd.read_sql(query, conn)
-                if df.empty:
-                    return "查询执行成功，但结果为空。"
-                return df.to_markdown(index=False)
+                try:
+                    df = pd.read_sql(query, conn)
+                    if df.empty:
+                        return "查询执行成功，但结果为空。"
+                    return df.to_markdown(index=False)
+                except Exception as query_error:
+                    # 如果查询出错，显式回滚以重置连接状态，防止污染连接池
+                    # "Can't reconnect until invalid transaction is rolled back" 错误通常由此导致
+                    conn.rollback()
+                    return f"执行查询时出错: {query_error}"
         except Exception as e:
-            return f"执行查询时出错: {e}"
+            return f"数据库连接错误: {e}"
 
 
 class AppDatabase:

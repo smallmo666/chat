@@ -13,8 +13,8 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         # 不再只取最后一条消息，而是使用整个对话历史来理解上下文
         messages = state["messages"]
         
-        # Truncate history to avoid token overflow
-        # Keep last 10 messages should be enough
+        # 截断历史记录以避免 Token 溢出
+        # 保留最后 10 条消息应该足够了
         if len(messages) > 10:
             messages = messages[-10:]
         
@@ -55,7 +55,7 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         
         chain = prompt | llm
         
-        # Pass config to invoke to propagate callbacks
+        # 传递 config 给 invoke 以传播回调
         invoke_args = {"history": messages}
         print("DEBUG: Invoking LLM for DSL generation...")
         if config:
@@ -82,6 +82,6 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         print(f"ERROR in generate_dsl_node: {e}")
         import traceback
         traceback.print_exc()
-        # Return a dummy DSL to prevent crash, or re-raise?
-        # Re-raising allows server to catch it and send error event
+        # 返回一个虚拟 DSL 以防止崩溃，还是重新抛出？
+        # 重新抛出允许服务器捕获它并发送错误事件
         raise e
