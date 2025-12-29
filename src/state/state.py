@@ -21,6 +21,7 @@ class AgentState(TypedDict):
     results: Optional[str]
     intent_clear: bool
     relevant_schema: Optional[str]
+    rewritten_query: Optional[str]
     manual_selected_tables: Optional[list[str]]
     
     # Dynamic Planning Fields
@@ -30,3 +31,7 @@ class AgentState(TypedDict):
     # Advanced Capabilities Fields
     visualization: Optional[dict] # ECharts option JSON
     analysis: Optional[str] # Markdown analysis result
+    
+    # Error Handling Fields
+    error: Optional[str]
+    retry_count: Optional[int]

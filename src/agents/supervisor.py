@@ -11,6 +11,33 @@ def supervisor_node(state: AgentState) -> dict:
         current_index = state.get("current_step_index", 0)
         
         print(f"DEBUG: Supervisor - Plan len: {len(plan)}, Current Index: {current_index}")
+
+        # --- Retry Logic ---
+        error = state.get("error")
+        if error:
+            retry_count = state.get("retry_count", 0)
+            print(f"DEBUG: Supervisor - Detected error: {error}. Retry count: {retry_count}")
+            
+            if retry_count < 3:
+                # Find the index of GenerateDSL to rewind
+                gen_dsl_index = -1
+                for i, step in enumerate(plan):
+                    if step["node"] == "GenerateDSL":
+                        gen_dsl_index = i
+                        break
+                
+                if gen_dsl_index != -1:
+                    print(f"DEBUG: Supervisor - Rewinding to GenerateDSL (index {gen_dsl_index}) for retry.")
+                    return {
+                        "next": "GenerateDSL",
+                        "current_step_index": gen_dsl_index + 1, # Next time supervisor runs, it will be after GenerateDSL
+                        "retry_count": retry_count + 1
+                    }
+                else:
+                    print("DEBUG: Supervisor - GenerateDSL not found in plan, cannot retry.")
+            else:
+                print("DEBUG: Supervisor - Max retries reached. Proceeding with error.")
+        # -------------------
         
         # 如果没有计划或已完成所有步骤，则结束
         if not plan or current_index >= len(plan):

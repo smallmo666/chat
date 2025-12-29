@@ -1,5 +1,5 @@
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from typing import List, Literal
 
 from src.state.state import AgentState
@@ -41,7 +41,14 @@ system_prompt = (
     "- 如果用户要求“绘制”、“画图”、“可视化”且上下文中有查询结果，请直接使用 Visualization，不要使用 TableQA。\n"
     "- “清单表”通常指的是之前的查询结果，如果用户说“绘制清单表”，意图是 Visualization。\n"
     "- 只有明确询问“数据库里有什么表”、“表的结构是什么”时，才使用 TableQA。\n\n"
-    "请生成一个 JSON 列表，包含步骤的 node 和 desc。"
+    "请制定执行计划，包含一系列步骤（node 和 desc），并以 JSON 格式输出。\n"
+    "输出格式示例：\n"
+    "{{\n"
+    "  \"plan\": [\n"
+    "    {{\"node\": \"SelectTables\", \"desc\": \"选择相关表\"}},\n"
+    "    {{\"node\": \"GenerateDSL\", \"desc\": \"生成查询 DSL\"}}\n"
+    "  ]\n"
+    "}}"
 )
 
 def planner_node(state: AgentState) -> dict:

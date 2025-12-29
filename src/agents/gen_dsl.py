@@ -39,7 +39,7 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
                 schema_info = "Schema info unavailable"
         
         # 动态构建系统提示词
-        system_prompt = (
+        base_system_prompt = (
             "你是一个 DSL 生成器。根据用户的对话历史，将用户的最新查询意图转换为 JSON DSL 格式。\n"
             "数据库 Schema 信息如下:\n"
             "{schema_info}\n\n"
@@ -48,8 +48,22 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
             "注意：如果用户是在回复澄清问题（例如'是的'），请结合上下文理解其真实意图。"
         )
         
+        # --- Context Hint: Rewritten Query ---
+        rewritten_query = state.get("rewritten_query")
+        if rewritten_query:
+            print(f"DEBUG: GenerateDSL - Injecting rewritten query hint: {rewritten_query}")
+            base_system_prompt += f"\n\n参考上下文重写后的查询: '{rewritten_query}'"
+        # -------------------------------------
+        
+        # --- Retry Logic: Error Context ---
+        error = state.get("error")
+        if error:
+            print(f"DEBUG: GenerateDSL - Injecting error context: {error}")
+            base_system_prompt += f"\n\n!!! 重要提示 !!!\n上一次生成的 DSL 导致了 SQL 执行错误：\n{error}\n请根据错误信息修正 DSL（例如：检查表名、列名是否正确）。"
+        # ----------------------------------
+        
         prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
+            ("system", base_system_prompt),
             MessagesPlaceholder(variable_name="history"),
         ]).partial(schema_info=schema_info)
         

@@ -63,7 +63,11 @@ class LongTermMemory:
                 self.memory.add(text, user_id=user_id)
                 return True
             except Exception as e:
-                print(f"添加记忆失败: {e}")
+                # 捕获可能的只读错误或连接错误，防止影响主流程
+                if "read only" in str(e).lower():
+                    print(f"添加记忆失败: 存储后端处于只读模式")
+                else:
+                    print(f"添加记忆失败: {e}")
                 return False
         return False
 

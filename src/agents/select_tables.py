@@ -1,8 +1,10 @@
 from src.state.state import AgentState
 from src.utils.schema_search import get_schema_searcher
-import json
+from src.utils.llm import get_llm
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
 
-def select_tables_node(state: AgentState, config: dict) -> dict:
+def select_tables_node(state: AgentState, config: dict = None) -> dict:
     """
     表选择节点。
     根据用户的查询，从大规模数据库中检索出最相关的表结构。
@@ -46,7 +48,20 @@ def select_tables_node(state: AgentState, config: dict) -> dict:
              
         return {"relevant_schema": schema_info}
 
+    # --- Multi-turn Context Handling ---
     messages = state["messages"]
+    
+    # 提取最近的 N 条对话历史（例如最近 3 轮），用于理解上下文
+    # 过滤出 Human 和 AI 的消息
+    recent_history = []
+    history_depth = 6 # 3 rounds
+    
+    for msg in reversed(messages):
+        if msg.type in ["human", "ai"]:
+            recent_history.insert(0, msg)
+        if len(recent_history) >= history_depth:
+            break
+            
     # 获取最新的用户查询
     last_human_msg = ""
     for msg in reversed(messages):
@@ -57,14 +72,46 @@ def select_tables_node(state: AgentState, config: dict) -> dict:
     if not last_human_msg:
         return {"relevant_schema": "No user query found."}
 
-    # 检索相关表 Schema
-    schema_info = searcher.search_relevant_tables(last_human_msg)
+    search_query = last_human_msg
+
+    # 如果有历史对话，尝试重写查询以包含上下文（指代消解）
+    if len(recent_history) > 1:
+        try:
+            llm = get_llm()
+            # 简单的历史格式化
+            history_str = ""
+            for msg in recent_history[:-1]: # Exclude current msg
+                role = "User" if msg.type == "human" else "Assistant"
+                history_str += f"{role}: {msg.content}\n"
+            
+            rewrite_prompt = ChatPromptTemplate.from_template(
+                "你是一个搜索优化助手。你的任务是将用户的最新问题重写为一个独立的、包含完整上下文的数据库搜索查询。\n"
+                "请解决指代问题（例如 '它' 指的是什么，'那些' 指的是什么），并补充缺失的限定条件。\n"
+                "只要返回重写后的查询字符串，不要解释。\n\n"
+                "对话历史:\n{history}\n"
+                "最新问题: {current_query}\n\n"
+                "重写后的查询:"
+            )
+            
+            chain = rewrite_prompt | llm
+            if config:
+                result = chain.invoke({"history": history_str, "current_query": last_human_msg}, config=config)
+            else:
+                result = chain.invoke({"history": history_str, "current_query": last_human_msg})
+                
+            rewritten_query = result.content.strip()
+            print(f"DEBUG: Rewritten Query: '{last_human_msg}' -> '{rewritten_query}'")
+            search_query = rewritten_query
+            
+        except Exception as e:
+            print(f"Query rewrite failed: {e}")
+            # Fallback to original query
+            search_query = last_human_msg
+
+    # 检索相关表 Schema (使用重写后的查询)
+    schema_info = searcher.search_relevant_tables(search_query)
     
-    # 打印日志方便调试
-    # print(f"Selected Schema: {schema_info[:100]}...")
-    
-    # 我们不直接返回 messages，而是更新 state 中的 schema 信息
-    # 注意：StateGraph 的 schema 需要支持这个字段，或者我们将其作为临时变量传递
-    # 这里我们假设 generate_dsl_node 会从 state 中读取这个信息，或者我们通过某种方式传递
-    # 由于 LangGraph state 是 dict，我们可以直接写入
-    return {"relevant_schema": schema_info}
+    return {
+        "relevant_schema": schema_info,
+        "rewritten_query": search_query # 将重写后的查询传递给下游节点 (如 GenDSL)
+    }
