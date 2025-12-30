@@ -1,0 +1,14 @@
+[
+    {
+        "question": "有多少个用户？",
+        "expected_sql_pattern": "SELECT count\\(\\*\\) FROM users"
+    },
+    {
+        "question": "查询销量最高的产品",
+        "expected_sql_pattern": "SELECT .* FROM products .* ORDER BY .* DESC LIMIT 1"
+    },
+    {
+        "question": "Show me the top 5 customers by revenue",
+        "expected_sql_pattern": "SELECT .* FROM customers .* JOIN .* GROUP BY .* ORDER BY .* DESC LIMIT 5"
+    }
+]

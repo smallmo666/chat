@@ -1,42 +1,46 @@
-import { Table, Button, Modal, Form, Input, Select, message, Tag, Transfer } from 'antd';
-import { useState, useEffect } from 'react';
-import { PlusOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import React, { useEffect, useState } from 'react';
+import { Card, Button, List, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag } from 'antd';
+import { PlusOutlined, ProjectOutlined, DatabaseOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import api from '../lib/api';
+
+const { Title, Text } = Typography;
+const { Option } = Select;
 
 interface Project {
   id: number;
-  name: str;
+  name: string;
   data_source_id: number;
   scope_config: any;
 }
 
 interface DataSource {
   id: number;
-  name: str;
+  name: string;
 }
 
-const ProjectPage = () => {
+const ProjectPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
-  const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
+  const { message } = App.useApp();
 
-  // 获取项目和数据源列表
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [pRes, dRes] = await Promise.all([
-        fetch('http://localhost:8000/api/projects'),
-        fetch('http://localhost:8000/api/datasources')
-      ]);
-      setProjects(await pRes.json());
-      setDataSources(await dRes.json());
+        const [projRes, dsRes] = await Promise.all([
+            api.get('/api/projects'),
+            api.get('/api/datasources')
+        ]);
+        setProjects(projRes.data);
+        setDataSources(dsRes.data);
     } catch (error) {
-      message.error('加载数据失败');
+        message.error('加载数据失败');
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
   };
 
@@ -45,81 +49,110 @@ const ProjectPage = () => {
   }, []);
 
   const handleCreate = async (values: any) => {
-    // 基础实现：Scope 暂时为空或需要手动输入
-    // 未来：添加 Transfer 组件以在选择数据源后选择表
-    const payload = {
-        name: values.name,
-        data_source_id: values.data_source_id,
-        scope_config: {} // 默认空范围表示所有表（或待定义的逻辑）
-    };
-
     try {
-      const res = await fetch('http://localhost:8000/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        message.success('项目创建成功');
-        setIsModalOpen(false);
-        form.resetFields();
-        fetchData();
-      } else {
-        message.error('创建项目失败');
-      }
+      await api.post('/api/projects', values);
+      message.success('项目创建成功');
+      setIsModalOpen(false);
+      form.resetFields();
+      fetchData();
     } catch (error) {
-      message.error('创建项目时出错');
+      message.error('创建失败');
     }
   };
 
-  const columns = [
-    { title: 'ID', dataIndex: 'id', key: 'id' },
-    { title: '项目名称', dataIndex: 'name', key: 'name' },
-    { 
-      title: '数据源', 
-      key: 'ds',
-      render: (_: any, record: Project) => {
-        const ds = dataSources.find(d => d.id === record.data_source_id);
-        return ds ? <Tag color="blue">{ds.name}</Tag> : record.data_source_id;
-      }
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: any, record: Project) => (
-        <Button 
-            type="primary" 
-            icon={<PlayCircleOutlined />} 
-            onClick={() => navigate(`/chat/${record.id}`)}
-        >
-            进入分析
-        </Button>
-      ),
-    },
-  ];
-
   return (
-    <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <h2>项目管理</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsModalOpen(true)}>
-          新增项目
+    <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <div>
+            <Title level={2} style={{ marginBottom: 0 }}>项目列表</Title>
+            <Text type="secondary">管理您的数据分析项目工作区</Text>
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} size="large" onClick={() => setIsModalOpen(true)}>
+          新建项目
         </Button>
       </div>
-      <Table columns={columns} dataSource={projects} rowKey="id" loading={loading} />
 
-      <Modal title="新增项目" open={isModalOpen} onOk={form.submit} onCancel={() => setIsModalOpen(false)}>
+      {projects.length === 0 && !loading ? (
+        <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+                <span style={{color: '#888'}}>
+                    暂无项目，请先创建一个
+                </span>
+            }
+        >
+            <Button type="primary" onClick={() => setIsModalOpen(true)}>立即创建</Button>
+        </Empty>
+      ) : (
+        <List
+            grid={{ gutter: 24, xs: 1, sm: 2, md: 3, lg: 3, xl: 4 }}
+            dataSource={projects}
+            loading={loading}
+            renderItem={(item) => (
+            <List.Item>
+                <Card 
+                    hoverable
+                    style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #f0f0f0' }}
+                    styles={{ body: { padding: 24 } }}
+                    actions={[
+                        <Button type="link" onClick={() => navigate(`/chat/${item.id}`)}>
+                            进入分析 <RightOutlined />
+                        </Button>
+                    ]}
+                >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16 }}>
+                        <div style={{ 
+                            width: 48, height: 48, 
+                            borderRadius: 8, 
+                            background: '#e6f7ff', 
+                            color: '#1890ff',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            marginRight: 16,
+                            fontSize: 24
+                        }}>
+                            <ProjectOutlined />
+                        </div>
+                        <div>
+                            <Title level={4} style={{ margin: 0, marginBottom: 4 }}>{item.name}</Title>
+                            <Space size={4}>
+                                <Tag icon={<DatabaseOutlined />} color="cyan">
+                                    {dataSources.find(d => d.id === item.data_source_id)?.name || '未知数据源'}
+                                </Tag>
+                            </Space>
+                        </div>
+                    </div>
+                    <div style={{ color: '#8c8c8c', fontSize: 13, height: 40, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                        基于 {dataSources.find(d => d.id === item.data_source_id)?.name} 的数据分析项目。
+                    </div>
+                </Card>
+            </List.Item>
+            )}
+        />
+      )}
+
+      <Modal
+        title="新建项目"
+        open={isModalOpen}
+        onCancel={() => setIsModalOpen(false)}
+        footer={null}
+      >
         <Form form={form} onFinish={handleCreate} layout="vertical">
-          <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
+          <Form.Item name="name" label="项目名称" rules={[{ required: true }]}>
             <Input placeholder="请输入项目名称" />
           </Form.Item>
-          <Form.Item name="data_source_id" label="选择数据源" rules={[{ required: true, message: '请选择数据源' }]}>
-            <Select 
-                options={dataSources.map(d => ({ value: d.id, label: d.name }))} 
-                placeholder="请选择数据源"
-            />
+          <Form.Item name="data_source_id" label="关联数据源" rules={[{ required: true }]}>
+            <Select placeholder="请选择数据源">
+              {dataSources.map(ds => (
+                <Option key={ds.id} value={ds.id}>{ds.name}</Option>
+              ))}
+            </Select>
           </Form.Item>
-          {/* 未来：在此处添加基于所选数据源的表选择器 */}
+          <Form.Item>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <Button onClick={() => setIsModalOpen(false)}>取消</Button>
+                <Button type="primary" htmlType="submit">创建</Button>
+            </div>
+          </Form.Item>
         </Form>
       </Modal>
     </div>

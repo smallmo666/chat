@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table } from 'antd';
-import { Database, Activity } from 'lucide-react';
-import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined } from '@ant-design/icons';
+import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button } from 'antd';
+import { Activity } from 'lucide-react';
+import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
@@ -12,17 +12,26 @@ import TaskTimeline from '../components/TaskTimeline';
 import type { Message, TaskItem } from '../types';
 import { SchemaProvider, useSchema } from '../context/SchemaContext';
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title } = Typography;
+const { useBreakpoint } = Grid;
 
 const ChatPageContent: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const screens = useBreakpoint();
+  // md: 768px. If screen is smaller than md, we consider it mobile/tablet.
+  const isMobile = !screens.md; 
+  
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([
     { id: 'init', title: '等待输入...', status: 'pending' }
   ]);
   const [threadId, setThreadId] = useState<string>('');
+  
+  // Mobile Drawer States
+  const [showSchema, setShowSchema] = useState(false);
+  const [showTasks, setShowTasks] = useState(false);
   
   // State for latest data to export
   const [latestData, setLatestData] = useState<any[]>([]);
@@ -121,6 +130,14 @@ const ChatPageContent: React.FC = () => {
               else if (eventType === 'step') {
                 updateStepStatus(data.node, data.status, data.details, data.duration);
               }
+              else if (eventType === 'interrupt') {
+                setMessages(prev => [...prev, { 
+                    role: 'agent', 
+                    content: data.content, // The SQL string
+                    interrupt: true 
+                }]);
+                setIsLoading(false);
+              }
               else if (eventType === 'result') {
                 setMessages(prev => {
                     const newMsgs = [...prev];
@@ -203,10 +220,15 @@ const ChatPageContent: React.FC = () => {
                           if (lastMsg && lastMsg.role === 'agent' && !lastMsg.content && !lastMsg.thinking) {
                               newMsgs[newMsgs.length - 1] = {
                                   ...lastMsg,
-                                  content: vizContent
+                                  content: vizContent,
+                                  vizOption: vizData.option || vizData // Store raw option
                               };
                           } else {
-                              newMsgs.push({ role: 'agent', content: vizContent });
+                              newMsgs.push({ 
+                                  role: 'agent', 
+                                  content: vizContent,
+                                  vizOption: vizData.option || vizData
+                              });
                           }
                           return newMsgs;
                       });
@@ -236,7 +258,7 @@ const ChatPageContent: React.FC = () => {
     }
   };
 
-  const updateStepStatus = (node: string, status: string, details: string, duration?: number) => {
+  const updateStepStatus = (node: string, _status: string, details: string, duration?: number) => {
     setTasks(prev => {
       const newTasks = [...prev];
       const taskIndex = newTasks.findIndex(t => t.id === node);
@@ -275,9 +297,51 @@ const ChatPageContent: React.FC = () => {
         },
       }}
     >
-      <Layout style={{ height: 'calc(100vh - 100px)', background: '#f0f2f5' }}>
-        <Content style={{ padding: '0', height: '100%' }}>
-          <Splitter style={{ height: '100%', background: 'white', borderRadius: 0 }}>
+      <Layout style={{ height: '100%', background: 'transparent' }}>
+        <Content style={{ padding: isMobile ? '8px' : '16px', height: '100%' }}>
+          {isMobile ? (
+             // Mobile Layout: Stack + Drawer
+             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                 {/* Mobile Header Toolbar */}
+                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                     <Button icon={<DatabaseOutlined />} onClick={() => setShowSchema(true)}>表结构</Button>
+                     <Button icon={<ProjectOutlined />} onClick={() => setShowTasks(true)}>任务追踪</Button>
+                 </div>
+                 
+                 {/* Main Chat Area */}
+                 <div style={{ flex: 1, background: 'white', borderRadius: 12, border: '1px solid #f0f0f0', overflow: 'hidden' }}>
+                    <ChatWindow 
+                        messages={messages}
+                        isLoading={isLoading}
+                        onSendMessage={handleSendMessage}
+                        latestData={latestData}
+                    />
+                 </div>
+
+                 {/* Drawers */}
+                 <Drawer
+                    title="数据库 Schema"
+                    placement="left"
+                    onClose={() => setShowSchema(false)}
+                    open={showSchema}
+                    width="85%"
+                 >
+                     <SchemaBrowser />
+                 </Drawer>
+                 
+                 <Drawer
+                    title="执行计划追踪"
+                    placement="right"
+                    onClose={() => setShowTasks(false)}
+                    open={showTasks}
+                    width="85%"
+                 >
+                     <TaskTimeline tasks={tasks} />
+                 </Drawer>
+             </div>
+          ) : (
+             // Desktop Layout: Splitter
+             <Splitter style={{ height: '100%', background: 'white', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #f0f0f0' }}>
               {/* Left Sidebar: Schema Browser */}
               <Splitter.Panel defaultSize="20%" min="15%" style={{borderRight: '1px solid #f0f0f0'}}>
                  <SchemaBrowser />
@@ -295,16 +359,21 @@ const ChatPageContent: React.FC = () => {
 
               {/* Right: Execution Plan */}
               <Splitter.Panel defaultSize="20%" min="15%">
-                  <div style={{ height: '100%', padding: 24, background: '#fafafa', borderLeft: '1px solid #f0f0f0', overflowY: 'auto' }}>
-                      <Title level={5} style={{ marginBottom: 24, display: 'flex', alignItems: 'center' }}>
-                        <Activity size={18} style={{ marginRight: 8, color: '#1677ff' }} />
-                        执行计划追踪
-                      </Title>
+                  <div style={{ height: '100%', padding: 0, background: '#fafafa', borderLeft: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ padding: '16px 24px', borderBottom: '1px solid #f0f0f0', background: '#fff' }}>
+                        <Title level={5} style={{ margin: 0, display: 'flex', alignItems: 'center', fontSize: 15 }}>
+                            <Activity size={16} style={{ marginRight: 8, color: '#1677ff' }} />
+                            执行计划追踪
+                        </Title>
+                      </div>
                       
-                      <TaskTimeline tasks={tasks} />
+                      <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+                        <TaskTimeline tasks={tasks} />
+                      </div>
                   </div>
               </Splitter.Panel>
           </Splitter>
+          )}
         </Content>
       </Layout>
     </ConfigProvider>

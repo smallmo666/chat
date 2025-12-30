@@ -1,12 +1,14 @@
 import json
 import re
 from langchain_core.messages import AIMessage
-from src.state.state import AgentState
-from src.utils.db import get_query_db
-from src.utils.memory import get_memory
+from src.workflow.state import AgentState
+from src.core.database import get_query_db
+from src.domain.memory.short_term import get_memory
 from src.utils.security import is_safe_sql
+from src.domain.memory.few_shot import get_few_shot_retriever
+from src.domain.memory.semantic_cache import get_semantic_cache
 
-def execute_sql_node(state: AgentState, config: dict) -> dict:
+async def execute_sql_node(state: AgentState, config: dict) -> dict:
     """
     执行 SQL 节点。
     获取生成的 SQL，在 QueryDatabase (querydb) 中执行，并返回结果。
@@ -31,8 +33,12 @@ def execute_sql_node(state: AgentState, config: dict) -> dict:
     db = get_query_db()
     
     try:
-        # result_str 以前是字符串，现在是字典
-        db_result = db.run_query(sql)
+        # 尝试使用异步执行
+        try:
+            db_result = await db.run_query_async(sql)
+        except Exception as async_e:
+            print(f"Async execution failed, falling back to sync: {async_e}")
+            db_result = db.run_query(sql)
         
         # 检查数据库执行层面的错误 (虽然 db.run_query 内部 catch 了，但会返回 error 字段)
         if db_result.get("error"):
@@ -54,20 +60,46 @@ def execute_sql_node(state: AgentState, config: dict) -> dict:
             if msg.type == "human":
                 user_query = msg.content
                 break
-                
-        memory_text = f"用户查询: {user_query} -> 生成 SQL: {sql}"
         
-        try:
-            memory_client = get_memory()
-            if memory_client.add(user_id=user_id, text=memory_text):
-                # print(f"已保存到长期记忆: {memory_text}")
-                pass
-            else:
-                # print(f"未能保存到长期记忆 (未初始化或错误)")
-                pass
-        except Exception as e:
-            # print(f"保存记忆失败: {e}")
-            pass
+        # --- RAG Optimization: Save Query -> DSL pair ---
+        dsl = state.get("dsl", "")
+        if dsl and len(dsl) < 10000: # 简单保护
+             memory_text = f"Q: {user_query}\nDSL: {dsl}"
+             try:
+                # 1. 存入长期记忆 (Mem0) - 用户维度
+                memory_client = get_memory()
+                if memory_client.add(user_id=user_id, text=memory_text):
+                    print(f"已保存 RAG 记忆: {memory_text[:50]}...")
+                
+                # 2. 存入 Few-Shot 样本库 (Chroma) - 项目维度 (自进化)
+                # 仅当结果不为空时才保存，认为这是一次有效的成功查询
+                if json_result and json_result != "[]" and json_result != "null":
+                    project_id = config.get("configurable", {}).get("project_id")
+                    
+                    # A. Semantic Cache (Direct Hit)
+                    try:
+                        cache = get_semantic_cache(project_id)
+                        cache.add(user_query, sql)
+                    except Exception as ce:
+                        print(f"Failed to update Semantic Cache: {ce}")
+
+                    # B. Few-Shot Examples (Reference)
+                    try:
+                        retriever = get_few_shot_retriever(project_id)
+                        retriever.add_example(
+                            question=user_query,
+                            dsl=dsl,
+                            sql=sql,
+                            metadata={"user_id": user_id, "source": "auto_learning"}
+                        )
+                    except Exception as fe:
+                        print(f"Failed to update Few-Shot Retriever: {fe}")
+             except Exception as e:
+                print(f"保存 RAG 记忆失败: {e}")
+        # ------------------------------------------------
+        
+        # 兼容旧逻辑 (可选，如果不再需要 SQL 记忆可移除，但保留无害)
+        # memory_text_old = f"用户查询: {user_query} -> 生成 SQL: {sql}"
         
         # 我们返回结果，并将其作为一条消息添加到历史记录中
         # 注意：为了防止 Context Window 溢出，如果结果过长，我们在历史记录中只保存摘要。

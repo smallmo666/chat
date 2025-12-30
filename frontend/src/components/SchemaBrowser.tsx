@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Input, Tree, Typography } from 'antd';
+import { Input, Tree } from 'antd';
 import { TableOutlined, SearchOutlined, ColumnHeightOutlined } from '@ant-design/icons';
 import type { TreeDataNode } from '../types';
 import { useSchema } from '../context/SchemaContext';
 
-const { Text } = Typography;
 const { DirectoryTree } = Tree;
 
 const SchemaBrowser: React.FC = () => {
@@ -61,26 +60,46 @@ const SchemaBrowser: React.FC = () => {
 
     return (
         <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
-            <div style={{padding: '16px', borderBottom: '1px solid #f0f0f0', background: '#fafafa'}}>
-                <div style={{display: 'flex', alignItems: 'center', marginBottom: 12}}>
-                    <TableOutlined style={{marginRight: 8}} />
-                    <Text strong>数据库表 ({dbTables.length})</Text>
+            <div style={{
+                padding: '16px 24px', 
+                borderBottom: '1px solid #f0f0f0', 
+                background: '#fff',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+            }}>
+                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                    <div style={{display: 'flex', alignItems: 'center', fontWeight: 600, fontSize: 15, color: '#1f1f1f'}}>
+                        <TableOutlined style={{marginRight: 8, color: '#1677ff'}} />
+                        数据表清单
+                        <span style={{
+                            marginLeft: 8, 
+                            fontSize: 12, 
+                            background: '#f0f0f0', 
+                            padding: '2px 8px', 
+                            borderRadius: 10, 
+                            color: '#666',
+                            fontWeight: 'normal'
+                        }}>{dbTables.length}</span>
+                    </div>
                 </div>
                 <Input 
-                    placeholder="搜索表..." 
+                    placeholder="搜索表名或注释..." 
                     prefix={<SearchOutlined style={{color: '#bfbfbf'}} />} 
                     value={tableSearch}
                     onChange={e => setTableSearch(e.target.value)}
                     allowClear
+                    variant="filled"
+                    style={{ borderRadius: 8 }}
                 />
             </div>
-            <div style={{flex: 1, overflow: 'auto', padding: '0 8px'}}>
+            <div style={{flex: 1, overflow: 'auto', padding: '12px 0'}}>
                 <DirectoryTree
                     checkable
                     multiple
                     treeData={treeData}
                     showIcon
-                    style={{background: 'transparent'}}
+                    style={{background: 'transparent', fontSize: 13}}
                     height={800} // Virtual scroll
                     checkedKeys={checkedKeys}
                     onCheck={(checked) => {
@@ -96,6 +115,10 @@ const SchemaBrowser: React.FC = () => {
                         setAutoExpandParent(false);
                     }}
                     autoExpandParent={autoExpandParent}
+                    icon={(props: any) => {
+                        if (props.isLeaf) return <ColumnHeightOutlined style={{fontSize: 11, color: '#8c8c8c'}} />;
+                        return <TableOutlined style={{color: '#1677ff'}} />;
+                    }}
                 />
             </div>
         </div>

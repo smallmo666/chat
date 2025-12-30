@@ -1,22 +1,68 @@
 import json
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from src.state.state import AgentState
-from src.utils.llm import get_llm
-from src.utils.db import get_app_db
+from src.workflow.state import AgentState
+from src.core.llm import get_llm
+from src.core.database import get_app_db
+from src.domain.memory.few_shot import get_few_shot_retriever
+from src.domain.schema.value import get_value_searcher
 
-llm = get_llm()
+llm = None # Will be initialized in node
 
 def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering generate_dsl_node")
     try:
+        project_id = config.get("configurable", {}).get("project_id") if config else None
+        llm = get_llm(node_name="GenerateDSL", project_id=project_id)
+        
         # 不再只取最后一条消息，而是使用整个对话历史来理解上下文
         messages = state["messages"]
-        
-        # 截断历史记录以避免 Token 溢出
         # 保留最后 10 条消息应该足够了
         if len(messages) > 10:
             messages = messages[-10:]
+            
+        # 获取最新的用户查询用于检索 Few-Shot
+        last_human_msg = ""
+        for msg in reversed(messages):
+            if msg.type == "human":
+                last_human_msg = msg.content
+                break
+        
+        project_id = config.get("configurable", {}).get("project_id") if config else None
+        
+        # --- 1. Entity Linking (Value Search) ---
+        # 尝试查找用户查询中的实体与数据库值的映射
+        value_hints = ""
+        try:
+            if last_human_msg and project_id:
+                searcher = get_value_searcher(project_id)
+                # 简单策略：将用户 query 拆分为 n-gram 或直接作为整体搜索
+                # 这里为了简单，直接搜整个 query，或者简单的关键词提取
+                # 更好的做法是让 LLM 先提取关键词，但为了性能我们先直接搜
+                matches = searcher.search_similar_values(last_human_msg, limit=5)
+                
+                if matches:
+                    hints = []
+                    for m in matches:
+                        # 过滤掉相似度太低的
+                        if m['score'] < 1.5: # Chroma L2 distance, smaller is better. Threshold needs tuning.
+                            hints.append(f"- '{m['value']}' (found in {m['table']}.{m['column']})")
+                    
+                    if hints:
+                        value_hints = "检测到潜在的数据库实体值匹配 (Entity Linking):\n" + "\n".join(hints)
+                        print(f"DEBUG: Value Linking Hints: {hints}")
+        except Exception as e:
+            print(f"Value linking failed: {e}")
+        # ----------------------------------------
+
+        # --- 2. Few-Shot Retrieval ---
+        retriever = get_few_shot_retriever(project_id)
+        rag_examples = ""
+        if last_human_msg:
+            rag_examples = retriever.retrieve(last_human_msg, k=3)
+            if rag_examples:
+                print(f"DEBUG: Retrieved few-shot examples (len={len(rag_examples)})")
+        # --------------------------
         
         # 获取数据库 Schema 信息
         # 优先使用 SelectTables 节点筛选出的相关 Schema
@@ -44,6 +90,8 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
             "数据库 Schema 信息如下:\n"
             "{schema_info}\n\n"
             "Schema 结构示例: {{\"table\": \"<表名>\", \"filters\": [{{\"field\": \"<列名>\", \"operator\": \"...\", \"value\": \"...\"}}], \"select\": [\"<列名1>\", \"<列名2>\"]}}\n"
+            "{value_hints}\n"
+            "{rag_examples}\n\n"
             "仅返回有效的 JSON 字符串，不要包含 Markdown 格式。\n"
             "注意：如果用户是在回复澄清问题（例如'是的'），请结合上下文理解其真实意图。"
         )
@@ -65,7 +113,7 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         prompt = ChatPromptTemplate.from_messages([
             ("system", base_system_prompt),
             MessagesPlaceholder(variable_name="history"),
-        ]).partial(schema_info=schema_info)
+        ]).partial(schema_info=schema_info, rag_examples=rag_examples, value_hints=value_hints)
         
         chain = prompt | llm
         

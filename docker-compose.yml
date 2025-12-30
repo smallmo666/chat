@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_DB_HOST=mysql
+      - APP_DB_PORT=3306
+      - APP_DB_USER=root
+      - APP_DB_PASSWORD=root
+      - APP_DB_NAME=text2sql_app
+      - REDIS_HOST=redis
+      - PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - mysql
+      - redis
+      - phoenix
+    volumes:
+      - ./src:/app/src
+      - ./chroma_db:/app/chroma_db
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=text2sql_app
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    environment:
+      - PHOENIX_PORT=6006
+      - PHOENIX_GRPC_PORT=4317
+
+volumes:
+  mysql_data:

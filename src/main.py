@@ -16,8 +16,8 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
-from src.graph import create_graph
-from src.utils.db import get_query_db, get_app_db
+from src.workflow.graph import create_graph
+from src.core.database import get_query_db, get_app_db
 from src.utils.callbacks import UIStreamingCallbackHandler
 
 console = Console()

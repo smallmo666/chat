@@ -4,12 +4,12 @@ import { PlusOutlined, DeleteOutlined, ThunderboltOutlined, EditOutlined } from 
 
 interface DataSource {
   id: number;
-  name: str;
-  type: str;
-  host: str;
+  name: string;
+  type: string;
+  host: string;
   port: number;
-  user: str;
-  dbname: str;
+  user: string;
+  dbname: string;
 }
 
 const DataSourcePage = () => {
@@ -23,10 +23,14 @@ const DataSourcePage = () => {
     setLoading(true);
     try {
       const res = await fetch('http://localhost:8000/api/datasources');
+      if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+      }
       const json = await res.json();
       setData(json);
     } catch (error) {
-      message.error('加载数据源失败');
+      console.error('Fetch error:', error);
+      message.error('加载数据源失败: 请检查后端服务是否正常启动');
     } finally {
       setLoading(false);
     }

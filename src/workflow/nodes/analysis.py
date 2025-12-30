@@ -1,16 +1,18 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 
-from src.state.state import AgentState
-from src.utils.llm import get_llm
+from src.workflow.state import AgentState
+from src.core.llm import get_llm
 
-llm = get_llm()
+llm = None # Will be initialized in node
 
-def analysis_node(state: AgentState) -> dict:
+def analysis_node(state: AgentState, config: dict = None) -> dict:
     """
     数据分析节点。
     根据 SQL 执行结果和用户查询，生成数据解读和洞察。
     """
+    project_id = config.get("configurable", {}).get("project_id") if config else None
+    llm = get_llm(node_name="DataAnalysis", project_id=project_id)
     query = state["messages"][-1].content # 理想情况下找到最后一条用户消息
     for msg in reversed(state["messages"]):
         if msg.type == "human":

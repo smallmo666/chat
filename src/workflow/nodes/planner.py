@@ -2,13 +2,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from typing import List, Literal
 
-from src.state.state import AgentState
-from src.utils.llm import get_llm
+from src.workflow.state import AgentState
+from src.core.llm import get_llm
 
-llm = get_llm()
+llm = None # Will be initialized in node
 
 class PlanStep(BaseModel):
-    node: Literal["ClarifyIntent", "SelectTables", "GenerateDSL", "DSLtoSQL", "ExecuteSQL", "DataAnalysis", "Visualization", "TableQA"] = Field(
+    node: Literal["ClarifyIntent", "SelectTables", "GenerateDSL", "DSLtoSQL", "ExecuteSQL", "DataAnalysis", "Visualization", "AnalysisViz", "TableQA", "PythonAnalysis"] = Field(
         ..., description="The node to execute"
     )
     desc: str = Field(..., description="Description of the step")
@@ -26,20 +26,19 @@ system_prompt = (
     "- GenerateDSL: 已有表信息，需要生成中间 DSL。\n"
     "- DSLtoSQL: 已有 DSL，需要转换为 SQL。\n"
     "- ExecuteSQL: 已有 SQL，需要执行查询。\n"
-    "- DataAnalysis: 已有查询结果，需要进行数据解读、洞察分析时使用。\n"
-    "- Visualization: 已有查询结果，需要生成图表时使用。\n"
+    "- AnalysisViz: (并行节点) 已有查询结果，同时进行数据分析和可视化生成。适用于常规分析。\n"
+    "- PythonAnalysis: (高级分析) 当用户需要复杂的统计计算、预测、高级数据清洗时使用。使用 Pandas 执行 Python 代码。\n"
     "- TableQA: 当用户询问数据库表结构、字段含义等元数据问题时使用（不需要生成 SQL）。\n\n"
     "典型场景：\n"
-    "1. 数据查询与分析：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL -> DataAnalysis -> Visualization\n"
-    "2. 仅查询数据：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL\n"
-    "3. 询问表信息：TableQA\n"
-    "4. 意图不明：ClarifyIntent\n"
-    "5. 后续深入分析（已有结果）：DataAnalysis -> Visualization\n"
-    "6. 询问表结构/有哪些表：TableQA\n"
-    "7. 对当前数据进行绘图/可视化：Visualization\n\n"
+    "1. 常规查询与分析：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL -> AnalysisViz\n"
+    "2. 复杂统计/预测/高级计算：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL -> PythonAnalysis\n"
+    "3. 仅查询数据：SelectTables -> GenerateDSL -> DSLtoSQL -> ExecuteSQL\n"
+    "4. 询问表信息：TableQA\n"
+    "5. 意图不明：ClarifyIntent\n"
+    "6. 对已有数据做预测/复杂处理：PythonAnalysis\n\n"
     "注意：\n"
-    "- 如果用户要求“绘制”、“画图”、“可视化”且上下文中有查询结果，请直接使用 Visualization，不要使用 TableQA。\n"
-    "- “清单表”通常指的是之前的查询结果，如果用户说“绘制清单表”，意图是 Visualization。\n"
+    "- 如果用户提到“预测”、“线性回归”、“相关性”、“复杂清洗”，请务必使用 **PythonAnalysis**。\n"
+    "- 常规的“绘制”、“画图”、“可视化”使用 AnalysisViz 即可。\n"
     "- 只有明确询问“数据库里有什么表”、“表的结构是什么”时，才使用 TableQA。\n\n"
     "请制定执行计划，包含一系列步骤（node 和 desc），并以 JSON 格式输出。\n"
     "输出格式示例：\n"
@@ -51,7 +50,15 @@ system_prompt = (
     "}}"
 )
 
-def planner_node(state: AgentState) -> dict:
+def planner_node(state: AgentState, config: dict = None) -> dict:
+    """
+    规划器节点。
+    """
+    print("DEBUG: Entering planner_node")
+    
+    project_id = config.get("configurable", {}).get("project_id") if config else None
+    llm = get_llm(node_name="Planner", project_id=project_id)
+    
     # 检查我们是否已经有计划并且正在执行中
     # 但是等等，Planner 通常是入口点或澄清后的重新入口
     # 为了简单起见，如果计划为空或我们刚刚完成 ClarifyIntent，我们会重新生成计划

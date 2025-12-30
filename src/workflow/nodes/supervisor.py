@@ -1,10 +1,13 @@
-from src.state.state import AgentState
+from src.workflow.state import AgentState
 
-def supervisor_node(state: AgentState) -> dict:
+def supervisor_node(state: AgentState, config: dict = None) -> dict:
     """
-    监督者节点（调度器）。
-    从状态中读取 'plan' 和 'current_step_index' 以确定下一个节点。
+    Supervisor Node.
+    Decides the next node to execute based on the plan and current state.
     """
+    project_id = config.get("configurable", {}).get("project_id") if config else None
+    llm = get_llm(node_name="Supervisor", project_id=project_id)
+    
     print("DEBUG: Entering supervisor_node")
     try:
         plan = state.get("plan", [])

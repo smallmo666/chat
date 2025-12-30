@@ -1,0 +1,59 @@
+import warnings
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from phoenix.trace.langchain import LangChainInstrumentor
+
+from src.core.database import get_app_db
+from src.workflow.graph import create_graph
+
+# Setup Phoenix Tracing
+# This will instrument all LangChain runs within this process
+LangChainInstrumentor().instrument()
+
+from src.api.routes import datasource, project, audit, chat, llm
+
+# Ignore warnings
+warnings.filterwarnings("ignore")
+
+app = FastAPI(title="Text2SQL Agent API")
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include Routers
+app.include_router(datasource.router)
+app.include_router(project.router)
+app.include_router(audit.router)
+app.include_router(chat.router)
+app.include_router(llm.router)
+
+@app.on_event("startup")
+async def startup_event():
+    print("Initializing Text2SQL Agent...")
+    
+    # Initialize DB (ensure tables created)
+    try:
+        get_app_db()
+    except Exception as e:
+        print(f"DB Init error: {e}")
+
+    # Pre-warm graph (optional, since it's lazy loaded in chat route now)
+    # But good to check for errors early
+    try:
+        create_graph()
+        print("Graph initialized check passed.")
+    except Exception as e:
+        print(f"Graph initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

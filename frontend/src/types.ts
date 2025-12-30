@@ -1,10 +1,10 @@
-import React from 'react';
-
-export type Message = {
-  role: 'user' | 'agent';
-  content?: string | React.ReactNode;
-  thinking?: string;
-  data?: any[]; // For export
+export interface Message {
+    role: 'user' | 'agent';
+    content?: string | any; // Allow any for complex content
+    thinking?: string;
+    data?: any[];
+    vizOption?: any; // ECharts option for dashboard pinning
+    interrupt?: boolean; // HITL flag
 }
 
 export type TaskItem = {

@@ -1,0 +1,22 @@
+[
+    {
+        "question": "查询 users 表中有多少个用户",
+        "expected_sql": "SELECT COUNT(*) FROM users"
+    },
+    {
+        "question": "找出 2023 年注册的用户",
+        "expected_sql": "SELECT * FROM users WHERE EXTRACT(YEAR FROM joined_at) = 2023"
+    },
+    {
+        "question": "统计每个年龄段的用户数量",
+        "expected_sql": "SELECT age, COUNT(*) FROM users GROUP BY age"
+    },
+    {
+        "question": "查询 name 是 'Alice' 的用户邮箱",
+        "expected_sql": "SELECT email FROM users WHERE name = 'Alice'"
+    },
+    {
+        "question": "列出所有活跃用户的 id 和 name (is_active = true)",
+        "expected_sql": "SELECT id, name FROM users WHERE is_active = true"
+    }
+]

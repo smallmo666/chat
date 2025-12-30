@@ -1,8 +1,8 @@
 import json
 import chromadb
 from typing import List, Dict, Any
-from src.utils.db import get_app_db
-from src.utils.llm import get_llm
+from src.core.database import get_app_db
+from src.core.llm import get_llm
 from langchain_core.prompts import ChatPromptTemplate
 
 class SchemaSearcher:
@@ -102,6 +102,25 @@ class SchemaSearcher:
         if not all_tables:
             return "No schema available."
 
+        # --- 0. Query Expansion (HyDE) ---
+        # 使用 LLM 生成假设性的表结构描述，以增强语义匹配
+        # 仅当查询较短或模糊时启用，避免增加延迟
+        hyde_query = query
+        if len(query) < 20 or "表" not in query:
+            try:
+                hyde_prompt = ChatPromptTemplate.from_template(
+                    "请根据用户查询 '{query}'，推测数据库中可能包含的相关表名和字段名。\n"
+                    "例如：查询'营收' -> 可能涉及 tables: sales, revenue, orders; columns: amount, price, total.\n"
+                    "仅返回推测的关键词列表，用空格分隔。"
+                )
+                chain = hyde_prompt | self.llm
+                result = chain.invoke({"query": query})
+                keywords = result.content.strip()
+                hyde_query = f"{query} {keywords}"
+                print(f"DEBUG: HyDE Expanded Query: {hyde_query}")
+            except Exception as e:
+                print(f"HyDE expansion failed: {e}")
+
         # --- 1. 混合检索阶段 ---
         candidates_map = {} # map table_name -> {'score': float, 'source': str, 'info': dict}
 
@@ -116,8 +135,9 @@ class SchemaSearcher:
         if self._collection:
             try:
                 # 查询 top-20 语义相关表
+                # 使用 HyDE 增强后的查询
                 vector_results = self._collection.query(
-                    query_texts=[query],
+                    query_texts=[hyde_query],
                     n_results=min(20, len(all_tables))
                 )
                 
@@ -252,10 +272,12 @@ class SchemaSearcher:
             
         return "\n\n".join(relevant_schema_info)
 
-# 全局实例
-_searcher = None
-def get_schema_searcher():
-    global _searcher
-    if _searcher is None:
-        _searcher = SchemaSearcher()
-    return _searcher
+# 全局实例缓存 (Project ID -> SchemaSearcher)
+_searchers = {}
+
+def get_schema_searcher(project_id: int = None):
+    global _searchers
+    key = project_id or "default"
+    if key not in _searchers:
+        _searchers[key] = SchemaSearcher(project_id)
+    return _searchers[key]
