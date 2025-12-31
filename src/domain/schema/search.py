@@ -10,7 +10,8 @@ class SchemaSearcher:
     负责从大规模 Schema 中检索相关表的工具。
     使用混合检索策略：关键词匹配 + ChromaDB 向量语义检索 + LLM 精选。
     """
-    def __init__(self):
+    def __init__(self, project_id: int = None):
+        self.project_id = project_id
         self.app_db = get_app_db()
         self.llm = get_llm()
         self._schema_cache = None
@@ -31,9 +32,10 @@ class SchemaSearcher:
     def _init_vector_db(self):
         """初始化 ChromaDB 并索引表信息"""
         try:
-            self._chroma_client = chromadb.Client()
-            # 每次重启重建索引，保证最新。生产环境应持久化。
-            self._collection = self._chroma_client.create_collection(name="db_tables", get_or_create=True)
+            # 使用持久化客户端，路径与 SemanticCache 保持一致
+            self._chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            collection_name = f"db_tables_{self.project_id}" if self.project_id else "db_tables_default"
+            self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
             
             # 如果集合为空，进行索引
             if self._collection.count() == 0:

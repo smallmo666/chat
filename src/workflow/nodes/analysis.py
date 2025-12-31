@@ -6,7 +6,7 @@ from src.core.llm import get_llm
 
 llm = None # Will be initialized in node
 
-def analysis_node(state: AgentState, config: dict = None) -> dict:
+async def analysis_node(state: AgentState, config: dict = None) -> dict:
     """
     数据分析节点。
     根据 SQL 执行结果和用户查询，生成数据解读和洞察。
@@ -40,7 +40,7 @@ def analysis_node(state: AgentState, config: dict = None) -> dict:
     )
     
     chain = prompt | llm
-    response = chain.invoke({
+    response = await chain.ainvoke({
         "query": query,
         "sql": sql,
         "results": results[:5000] # 如果太长则截断

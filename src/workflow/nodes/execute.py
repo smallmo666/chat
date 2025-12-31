@@ -52,17 +52,42 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
         user_id = config.get("configurable", {}).get("thread_id", "default_user")
         
         # 构建记忆内容：用户的查询意图 + 生成的 SQL
-        # 我们从 messages 中找到最近的一条 HumanMessage 作为用户的查询
-        # 注意：在多轮对话中，可能需要更复杂的逻辑来确定原始查询，这里简化处理
+        # 优先使用 rewritten_query (更准确的意图)，如果不存在则使用 messages 中的
+        rewritten_query = state.get("rewritten_query")
+        
         messages = state.get("messages", [])
         user_query = "未知查询"
-        for msg in reversed(messages):
-            if msg.type == "human":
-                user_query = msg.content
-                break
+        if rewritten_query:
+            user_query = rewritten_query
+        else:
+            for msg in reversed(messages):
+                if msg.type == "human":
+                    user_query = msg.content
+                    break
         
         # --- RAG Optimization: Save Query -> DSL pair ---
         dsl = state.get("dsl", "")
+        
+        # --- Feedback Loop: Detect User Correction ---
+        # 如果当前 SQL 与最初生成的 SQL 不一致 (假设 State 中保存了 original_sql，或者通过 comparison)
+        # 这里的 state['sql'] 是最终执行的 SQL。
+        # 如果这是 Human-in-the-Loop 流程，我们需要知道是否被修改过。
+        # 简单判定：如果 state 中有 'manual_modified' 标记 (需要前端/API支持传递)
+        # 或者，我们可以假设只要执行成功，就是好的样本。
+        # 为了更精准，我们依赖 DSLtoSQL 生成的 sql 和最终执行的 sql 是否一致？
+        # 但 DSLtoSQL 生成的 sql 已经覆盖写入 state['sql'] 了。
+        # 我们假设只要执行成功，它就是高质量的样本 (Execution-based Filtering)。
+        
+        # Feedback Learning: 保存 (Question, SQL) 到 Few-Shot
+        # 仅当结果不为空时才保存，认为这是一次有效的成功查询
+        if json_result and json_result != "[]" and json_result != "null":
+            project_id = config.get("configurable", {}).get("project_id")
+            
+            # 1. 存入 Few-Shot 样本库 (Chroma) - 项目维度 (自进化)
+            # 这里的逻辑与上方重复了，合并处理
+            pass 
+        
+        # --- RAG Optimization & Feedback Learning Merged ---
         if dsl and len(dsl) < 10000: # 简单保护
              memory_text = f"Q: {user_query}\nDSL: {dsl}"
              try:
@@ -71,7 +96,7 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
                 if memory_client.add(user_id=user_id, text=memory_text):
                     print(f"已保存 RAG 记忆: {memory_text[:50]}...")
                 
-                # 2. 存入 Few-Shot 样本库 (Chroma) - 项目维度 (自进化)
+                # 2. 存入 Few-Shot 样本库 & Semantic Cache (Chroma) - 项目维度 (自进化)
                 # 仅当结果不为空时才保存，认为这是一次有效的成功查询
                 if json_result and json_result != "[]" and json_result != "null":
                     project_id = config.get("configurable", {}).get("project_id")
@@ -90,8 +115,9 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
                             question=user_query,
                             dsl=dsl,
                             sql=sql,
-                            metadata={"user_id": user_id, "source": "auto_learning"}
+                            metadata={"user_id": user_id, "source": "auto_learning"} # Unified source
                         )
+                        print(f"Feedback Loop: Saved successful query to Few-Shot. Query: {user_query}")
                     except Exception as fe:
                         print(f"Failed to update Few-Shot Retriever: {fe}")
              except Exception as e:

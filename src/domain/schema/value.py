@@ -16,9 +16,10 @@ class ValueSearcher:
 
     def _init_vector_db(self):
         try:
-            self._chroma_client = chromadb.Client()
+            # 使用持久化客户端，路径与 SemanticCache 保持一致
+            self._chroma_client = chromadb.PersistentClient(path="./chroma_db")
             collection_name = f"db_values_{self.project_id}" if self.project_id else "db_values_default"
-            self._collection = self._chroma_client.create_collection(name=collection_name, get_or_create=True)
+            self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
         except Exception as e:
             print(f"Failed to init ValueSearcher vector db: {e}")
 

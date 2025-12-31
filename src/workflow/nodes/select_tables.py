@@ -77,41 +77,49 @@ def select_tables_node(state: AgentState, config: dict = None) -> dict:
     if not last_human_msg:
         return {"relevant_schema": "No user query found."}
 
-    search_query = last_human_msg
-
-    # 如果有历史对话，尝试重写查询以包含上下文（指代消解）
-    if len(recent_history) > 1:
-        try:
-            llm = None # Will be initialized in node
-            # 简单的历史格式化
-            history_str = ""
-            for msg in recent_history[:-1]: # Exclude current msg
-                role = "User" if msg.type == "human" else "Assistant"
-                history_str += f"{role}: {msg.content}\n"
-            
-            rewrite_prompt = ChatPromptTemplate.from_template(
-                "你是一个搜索优化助手。你的任务是将用户的最新问题重写为一个独立的、包含完整上下文的数据库搜索查询。\n"
-                "请解决指代问题（例如 '它' 指的是什么，'那些' 指的是什么），并补充缺失的限定条件。\n"
-                "只要返回重写后的查询字符串，不要解释。\n\n"
-                "对话历史:\n{history}\n"
-                "最新问题: {current_query}\n\n"
-                "重写后的查询:"
-            )
-            
-            chain = rewrite_prompt | llm
-            if config:
-                result = chain.invoke({"history": history_str, "current_query": last_human_msg}, config=config)
-            else:
-                result = chain.invoke({"history": history_str, "current_query": last_human_msg})
+    # 优先使用 State 中已有的 rewritten_query (由 Planner 生成)
+    # 避免重复调用 LLM 进行重写
+    rewritten_query = state.get("rewritten_query")
+    if rewritten_query:
+        search_query = rewritten_query
+        print(f"DEBUG: SelectTables using existing rewritten query: '{search_query}'")
+    else:
+        search_query = last_human_msg
+        
+        # 如果没有 rewritten_query 但有历史对话，尝试在此处重写 (Fallback)
+        if len(recent_history) > 1:
+            try:
+                # 确保 LLM 被正确初始化
+                if not llm:
+                    llm = get_llm(node_name="SelectTables", project_id=project_id)
+                    
+                # 简单的历史格式化
+                history_str = ""
+                for msg in recent_history[:-1]: # Exclude current msg
+                    role = "User" if msg.type == "human" else "Assistant"
+                    history_str += f"{role}: {msg.content}\n"
                 
-            rewritten_query = result.content.strip()
-            print(f"DEBUG: Rewritten Query: '{last_human_msg}' -> '{rewritten_query}'")
-            search_query = rewritten_query
-            
-        except Exception as e:
-            print(f"Query rewrite failed: {e}")
-            # Fallback to original query
-            search_query = last_human_msg
+                rewrite_prompt = ChatPromptTemplate.from_template(
+                    "你是一个搜索优化助手。你的任务是将用户的最新问题重写为一个独立的、包含完整上下文的数据库搜索查询。\n"
+                    "请解决指代问题（例如 '它' 指的是什么，'那些' 指的是什么），并补充缺失的限定条件。\n"
+                    "只要返回重写后的查询字符串，不要解释。\n\n"
+                    "对话历史:\n{history}\n"
+                    "最新问题: {current_query}\n\n"
+                    "重写后的查询:"
+                )
+                
+                chain = rewrite_prompt | llm
+                if config:
+                    result = chain.invoke({"history": history_str, "current_query": last_human_msg}, config=config)
+                else:
+                    result = chain.invoke({"history": history_str, "current_query": last_human_msg})
+                    
+                search_query = result.content.strip()
+                print(f"DEBUG: SelectTables Rewritten Query: '{last_human_msg}' -> '{search_query}'")
+                
+            except Exception as e:
+                print(f"Query rewrite failed: {e}")
+                search_query = last_human_msg
 
     # 检索相关表 Schema (使用重写后的查询)
     schema_info = searcher.search_relevant_tables(search_query)
@@ -131,7 +139,10 @@ def select_tables_node(state: AgentState, config: dict = None) -> dict:
     if len(schema_info) > 3000:
         print(f"DEBUG: Schema too large ({len(schema_info)} chars). Pruning...")
         try:
-            llm = None # Will be initialized in node
+            # 确保 LLM 被正确初始化
+            if not llm:
+                llm = get_llm(node_name="SelectTables", project_id=project_id)
+                
             prune_prompt = ChatPromptTemplate.from_template(
                 "你是一个数据库 Schema 精简助手。\n"
                 "用户查询: {query}\n"

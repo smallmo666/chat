@@ -32,19 +32,30 @@ def is_safe_sql(sql: str) -> bool:
         exp.Union, 
         exp.Subquery, 
         exp.Table, # rare as root
-        exp.Values # VALUES (1,2)
+        exp.Values, # VALUES (1,2)
+        exp.Describe, # Allow DESCRIBE
+        exp.Show # Allow SHOW
     )
     
     # Some dialects might parse SHOW/DESCRIBE differently, but standard SQL is Select.
     # We explicitly reject: Insert, Update, Delete, Drop, Create, Alter, etc.
     
     if not isinstance(statement, valid_types):
-        # Check if it's a known DDL/DML
-        if isinstance(statement, (exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create, exp.Alter, exp.Truncate, exp.Command)):
+        # Check if it's a known DDL/DML/DCL
+        # Explicitly block GRANT/REVOKE (DCL) and Transaction control if not needed
+        forbidden_types = (
+            exp.Insert, exp.Update, exp.Delete, 
+            exp.Drop, exp.Create, exp.Alter, exp.Truncate, 
+            exp.Command, # Often catch-all for unknown commands
+            exp.Grant, exp.Revoke, exp.Commit, exp.Rollback
+        )
+        
+        if isinstance(statement, forbidden_types):
             return False
-        # Allow special "SHOW" or "DESCRIBE" if the dialect supports/parses them, 
-        # but sqlglot often puts them in Command or specific types.
-        # For safety, let's strictly allow only SELECT-like structures.
+            
+        # Allow special "SHOW" or "DESCRIBE" if parsed as Command but safe text
+        # But for now, sqlglot has types for them. 
+        # If it's none of the above, be conservative.
         return False
 
     # 2. Deep Traversal Check (Guardrails)

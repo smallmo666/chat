@@ -87,6 +87,10 @@ async def event_generator(
             
             # Use stream_mode="updates" to get incremental updates
             async for output in graph_app.astream(inputs, config=config):
+                # Check cancellation (though astream handles it, we want to be explicit for audit)
+                if queue.empty() and False: # Placeholder for cancellation check if needed
+                    break
+
                 step_end_time = time.time()
                 duration = round((step_end_time - step_start_time) * 1000)
                 step_start_time = step_end_time
@@ -224,7 +228,8 @@ async def event_generator(
                 # We are paused before ExecuteSQL
                 current_sql = snapshot.values.get("sql", "")
                 await queue.put({"type": "interrupt", "content": current_sql})
-                # Do not save audit log yet, as we are not done
+                # Do not save audit log yet, as we are not done (or save as 'pending')
+                # For simplicity, we skip saving here and wait for approval flow
                 return 
 
             # Save Audit Log (Success)
@@ -248,6 +253,30 @@ async def event_generator(
             except Exception as e:
                 print(f"Failed to save audit log: {e}")
                     
+        except GeneratorExit:
+            print(f"Client disconnected from stream: {thread_id}")
+            # Save Audit Log (Cancelled)
+            try:
+                total_duration = round((time.time() - audit_data.get("start_time", time.time())) * 1000)
+                app_db = get_app_db()
+                with app_db.get_session() as session:
+                    log_entry = AuditLog(
+                        project_id=audit_data.get("project_id"),
+                        session_id=audit_data.get("session_id", "unknown"),
+                        user_query=audit_data.get("user_query", ""),
+                        plan=audit_data.get("plan"),
+                        executed_sql=audit_data.get("executed_sql"),
+                        result_summary="Cancelled",
+                        duration_ms=total_duration,
+                        status="cancelled",
+                        error_message="Client disconnected"
+                    )
+                    session.add(log_entry)
+                    session.commit()
+            except Exception as log_err:
+                print(f"Failed to save cancelled audit log: {log_err}")
+            raise # Re-raise to stop generator properly
+
         except Exception as e:
             # Save Audit Log (Error)
             try:

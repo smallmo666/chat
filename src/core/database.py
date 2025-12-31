@@ -346,17 +346,20 @@ class DatabaseProvider:
         Get QueryDatabase instance.
         Uses cached engine if available to prevent connection leaks.
         """
-        datasource = None
         ds_key = "default"
+        datasource = None
 
         if project_id:
-            app_db = self.get_app_db()
-            with app_db.get_session() as session:
-                project = session.get(Project, project_id)
-                if project:
-                    datasource = session.get(DataSource, project.data_source_id)
-                    if datasource:
-                        ds_key = f"ds_{datasource.id}"
+            try:
+                app_db = self.get_app_db()
+                with app_db.get_session() as session:
+                    project = session.get(Project, project_id)
+                    if project:
+                        datasource = session.get(DataSource, project.data_source_id)
+                        if datasource:
+                            ds_key = f"ds_{datasource.id}"
+            except Exception as e:
+                print(f"Error fetching datasource for project {project_id}: {e}")
         
         if not datasource:
             # Default / Fallback: Create DataSource from env
@@ -371,31 +374,8 @@ class DatabaseProvider:
             )
             ds_key = "default_env"
 
-        # Create QueryDatabase instance
-        # We modify QueryDatabase to accept an optional existing engine or we manage the engine here
-        # To avoid changing QueryDatabase signature too much, let's inject the engine after init
-        # OR better: Cache the QueryDatabase object itself if it's stateless enough?
-        # QueryDatabase holds connection string and engine. It's relatively safe to cache.
-        
-        if ds_key in self._query_engines:
-            engine = self._query_engines[ds_key]
-            # Check if engine is still valid (basic check)
-            # SQLAlchemy engines are robust, usually don't need check unless explicit disposal
-            pass
-        else:
-            # Create a temporary QueryDatabase just to help create the engine correctly?
-            # Or better: Instantiate QueryDatabase and let it create the engine, then cache the engine
-            # But QueryDatabase __init__ creates engine.
-            pass
-
-        # Since QueryDatabase __init__ creates an engine, we should cache the QueryDatabase instance
-        # BUT QueryDatabase might have other state. Currently it seems stateless except for config.
-        # Let's cache the QueryDatabase instance.
-        
         if ds_key not in self._query_engines:
-             # This is actually storing QueryDatabase instances, not just engines
-             qdb = QueryDatabase(datasource)
-             self._query_engines[ds_key] = qdb
+             self._query_engines[ds_key] = QueryDatabase(datasource)
         
         return self._query_engines[ds_key]
 

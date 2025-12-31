@@ -18,6 +18,7 @@ class DataSourceRead(BaseModel):
     host: str
     port: int
     user: str
+    # password field is intentionally excluded for security
     dbname: str
 
 # --- Project Schemas ---

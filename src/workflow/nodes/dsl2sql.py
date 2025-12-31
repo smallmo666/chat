@@ -7,6 +7,17 @@ import json
 
 llm = None # Will be initialized in node
 
+# --- Prompts ---
+BASE_SYSTEM_PROMPT = """
+你是一位 SQL 专家。将以下的 JSON DSL 转换为 MySQL 查询语句。
+数据库 Schema 信息如下:
+{schema_info}
+
+{value_hints}
+
+仅返回 SQL 字符串，不要包含 Markdown 格式。
+"""
+
 def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering dsl_to_sql_node")
     try:
@@ -17,13 +28,17 @@ def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         print(f"DEBUG: dsl_to_sql_node input dsl: {dsl}")
         
         # --- Entity Linking / Value Correction ---
-        # 尝试解析 DSL JSON，提取过滤条件中的值
         value_hints = ""
         try:
-            dsl_json = json.loads(dsl)
+            # 预处理 DSL 字符串，尝试清理 Markdown
+            clean_dsl = dsl
+            if "```json" in clean_dsl:
+                clean_dsl = clean_dsl.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean_dsl:
+                clean_dsl = clean_dsl.split("```")[1].split("```")[0].strip()
+                
+            dsl_json = json.loads(clean_dsl)
             filters = dsl_json.get("filters", [])
-            # 同时也检查嵌套结构或 list 结构，视具体 DSL 定义而定
-            # 这里假设简单的单层结构
             
             project_id = config.get("configurable", {}).get("project_id")
             value_searcher = get_value_searcher(project_id)
@@ -48,12 +63,10 @@ def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         # -----------------------------------------
         
         # 获取数据库 Schema 信息
-        # 优先使用 SelectTables 节点筛选出的相关 Schema
         schema_info = state.get("relevant_schema", "")
         
         if not schema_info:
             print("DEBUG: No relevant_schema found in dsl_to_sql_node")
-            # Fallback
             try:
                 app_db = get_app_db()
                 full_schema_json = app_db.get_stored_schema_info()
@@ -64,13 +77,8 @@ def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
             except Exception as e:
                 schema_info = "Schema info unavailable"
         
-        system_prompt = (
-            "你是一位 SQL 专家。将以下的 JSON DSL 转换为 MySQL 查询语句。\n"
-            "数据库 Schema 信息如下:\n"
-            "{schema_info}\n\n"
-            "{value_hints}\n\n"
-            "仅返回 SQL 字符串，不要包含 Markdown 格式。"
-        )
+        # 动态构建系统提示词
+        system_prompt = BASE_SYSTEM_PROMPT
 
         # --- Retry Logic: Error Context ---
         error = state.get("error")

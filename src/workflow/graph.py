@@ -72,10 +72,7 @@ def create_graph():
         "CacheCheck",
         lambda x: x.get("next", "Planner"), # 默认去 Planner
         {
-            "ExecuteSQL": "Supervisor", # 如果命中，State 中 next 已设为 ExecuteSQL，但我们需要先去 Supervisor 调度? 
-            # 不，CacheCheck 直接返回了 plan 和 index=1。
-            # 如果我们去 Supervisor，Supervisor 会读 plan[1] -> ExecuteSQL。
-            # 所以这里我们指向 Supervisor 是安全的，只要 State 设置正确。
+            "ExecuteSQL": "Supervisor", # 如果命中，去 Supervisor 调度 ExecuteSQL
             "Planner": "Planner"
         }
     )

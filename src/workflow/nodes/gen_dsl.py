@@ -9,6 +9,20 @@ from src.domain.schema.value import get_value_searcher
 
 llm = None # Will be initialized in node
 
+# --- Prompts ---
+BASE_SYSTEM_PROMPT = """
+你是一个 DSL 生成器。根据用户的对话历史，将用户的最新查询意图转换为 JSON DSL 格式。
+数据库 Schema 信息如下:
+{schema_info}
+
+Schema 结构示例: {{"table": "<表名>", "filters": [{{"field": "<列名>", "operator": "...", "value": "..."}}], "select": ["<列名1>", "<列名2>"]}}
+{value_hints}
+{rag_examples}
+
+仅返回有效的 JSON 字符串，不要包含 Markdown 格式。
+注意：如果用户是在回复澄清问题（例如'是的'），请结合上下文理解其真实意图。
+"""
+
 def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering generate_dsl_node")
     try:
@@ -28,24 +42,18 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
                 last_human_msg = msg.content
                 break
         
-        project_id = config.get("configurable", {}).get("project_id") if config else None
-        
         # --- 1. Entity Linking (Value Search) ---
-        # 尝试查找用户查询中的实体与数据库值的映射
         value_hints = ""
         try:
             if last_human_msg and project_id:
                 searcher = get_value_searcher(project_id)
-                # 简单策略：将用户 query 拆分为 n-gram 或直接作为整体搜索
-                # 这里为了简单，直接搜整个 query，或者简单的关键词提取
-                # 更好的做法是让 LLM 先提取关键词，但为了性能我们先直接搜
                 matches = searcher.search_similar_values(last_human_msg, limit=5)
                 
                 if matches:
                     hints = []
                     for m in matches:
                         # 过滤掉相似度太低的
-                        if m['score'] < 1.5: # Chroma L2 distance, smaller is better. Threshold needs tuning.
+                        if m['score'] < 1.5: 
                             hints.append(f"- '{m['value']}' (found in {m['table']}.{m['column']})")
                     
                     if hints:
@@ -65,17 +73,14 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         # --------------------------
         
         # 获取数据库 Schema 信息
-        # 优先使用 SelectTables 节点筛选出的相关 Schema
         schema_info = state.get("relevant_schema", "")
         print(f"DEBUG: Schema info length: {len(schema_info)}")
         
         if not schema_info:
             print("DEBUG: No relevant_schema found, falling back to stored schema")
-            # Fallback: 获取部分 Schema 信息 (从 AppDB 获取存储的元数据)
             try:
                 app_db = get_app_db()
                 full_schema_json = app_db.get_stored_schema_info()
-                # 简单截断以防止溢出
                 if len(full_schema_json) > 5000:
                     schema_info = full_schema_json[:5000] + "\n...(truncated)"
                 else:
@@ -85,33 +90,24 @@ def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
                 schema_info = "Schema info unavailable"
         
         # 动态构建系统提示词
-        base_system_prompt = (
-            "你是一个 DSL 生成器。根据用户的对话历史，将用户的最新查询意图转换为 JSON DSL 格式。\n"
-            "数据库 Schema 信息如下:\n"
-            "{schema_info}\n\n"
-            "Schema 结构示例: {{\"table\": \"<表名>\", \"filters\": [{{\"field\": \"<列名>\", \"operator\": \"...\", \"value\": \"...\"}}], \"select\": [\"<列名1>\", \"<列名2>\"]}}\n"
-            "{value_hints}\n"
-            "{rag_examples}\n\n"
-            "仅返回有效的 JSON 字符串，不要包含 Markdown 格式。\n"
-            "注意：如果用户是在回复澄清问题（例如'是的'），请结合上下文理解其真实意图。"
-        )
+        system_prompt = BASE_SYSTEM_PROMPT
         
         # --- Context Hint: Rewritten Query ---
         rewritten_query = state.get("rewritten_query")
         if rewritten_query:
             print(f"DEBUG: GenerateDSL - Injecting rewritten query hint: {rewritten_query}")
-            base_system_prompt += f"\n\n参考上下文重写后的查询: '{rewritten_query}'"
+            system_prompt += f"\n\n参考上下文重写后的查询: '{rewritten_query}'"
         # -------------------------------------
         
         # --- Retry Logic: Error Context ---
         error = state.get("error")
         if error:
             print(f"DEBUG: GenerateDSL - Injecting error context: {error}")
-            base_system_prompt += f"\n\n!!! 重要提示 !!!\n上一次生成的 DSL 导致了 SQL 执行错误：\n{error}\n请根据错误信息修正 DSL（例如：检查表名、列名是否正确）。"
+            system_prompt += f"\n\n!!! 重要提示 !!!\n上一次生成的 DSL 导致了 SQL 执行错误：\n{error}\n请根据错误信息修正 DSL（例如：检查表名、列名是否正确）。"
         # ----------------------------------
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", base_system_prompt),
+            ("system", system_prompt),
             MessagesPlaceholder(variable_name="history"),
         ]).partial(schema_info=schema_info, rag_examples=rag_examples, value_hints=value_hints)
         

@@ -34,4 +34,5 @@ class AgentState(TypedDict):
     
     # Error Handling Fields
     error: Optional[str]
-    retry_count: Optional[int]
+    retry_count: Optional[int] # SQL Execution Retry Count (Inner Loop)
+    plan_retry_count: Optional[int] # Plan Regeneration Retry Count (Outer Loop)

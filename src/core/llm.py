@@ -1,4 +1,5 @@
 import os
+import functools
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
@@ -7,10 +8,11 @@ from src.core.models import Project, LLMProvider
 
 load_dotenv()
 
+@functools.lru_cache(maxsize=32)
 def get_llm(node_name: str = None, project_id: int = None) -> BaseChatModel:
     """
     Get LLM instance based on Project configuration and Node context.
-    If no specific config found, fallback to environment variables.
+    Cached to avoid frequent DB lookups and object creation overhead.
     """
     
     # 1. Try to load from Database if project_id and node_name provided

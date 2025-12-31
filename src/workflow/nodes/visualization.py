@@ -21,7 +21,7 @@ class EChartsOption(BaseModel):
 
 from src.workflow.nodes.visualization_advisor import get_viz_advisor
 
-def visualization_node(state: AgentState, config: dict = None) -> dict:
+async def visualization_node(state: AgentState, config: dict = None) -> dict:
     """
     可视化节点。
     结合规则推荐 (VisualizationAdvisor) 和 LLM 生成 ECharts 配置。
@@ -98,7 +98,7 @@ def visualization_node(state: AgentState, config: dict = None) -> dict:
         x_axis_hint = advice.get("x_axis") or "自动推断"
         y_axis_hint = ", ".join(advice.get("y_axis", [])) or "自动推断"
         
-        viz_data = chain.invoke({
+        viz_data = await chain.ainvoke({
             "query": query,
             "recommended_chart": advice["recommended_chart"],
             "reason": advice["reason"],

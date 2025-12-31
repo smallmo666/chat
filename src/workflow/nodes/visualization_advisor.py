@@ -37,7 +37,10 @@ class VisualizationAdvisor:
         # Rule 1: 趋势分析 (Time Series)
         if datetime_cols and numeric_cols:
             recommendation = "line"
-            reason = f"检测到时间列 '{datetime_cols[0]}' 和数值列，适合展示趋势。"
+            if len(numeric_cols) > 1:
+                reason = f"检测到时间列 '{datetime_cols[0]}' 和多个数值列 ({', '.join(numeric_cols)})，适合展示多维趋势对比。"
+            else:
+                reason = f"检测到时间列 '{datetime_cols[0]}' 和数值列，适合展示趋势。"
             x_axis = datetime_cols[0]
             y_axis = numeric_cols
             
@@ -47,7 +50,10 @@ class VisualizationAdvisor:
             unique_count = df[category_cols[0]].nunique()
             if unique_count <= 20:
                 recommendation = "bar"
-                reason = f"检测到类别列 '{category_cols[0]}' (基数={unique_count})，适合对比。"
+                if len(numeric_cols) > 1:
+                    reason = f"检测到类别列 '{category_cols[0]}' 和多个数值列 ({', '.join(numeric_cols)})，适合进行分组对比。"
+                else:
+                    reason = f"检测到类别列 '{category_cols[0]}' (基数={unique_count})，适合对比。"
                 x_axis = category_cols[0]
                 y_axis = numeric_cols
             else:

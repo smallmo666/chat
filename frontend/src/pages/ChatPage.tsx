@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button } from 'antd';
 import { Activity } from 'lucide-react';
-import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined } from '@ant-design/icons';
+import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
@@ -137,6 +137,28 @@ const ChatPageContent: React.FC = () => {
                     interrupt: true 
                 }]);
                 setIsLoading(false);
+              }
+              else if (eventType === 'code_generated') {
+                const codeContent = (
+                    <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><CodeOutlined style={{marginRight:6}}/> 生成的 Python 代码</span>} style={{marginTop: 8, background: '#f9f9f9', borderColor: '#d9d9d9'}}>
+                        <ReactMarkdown 
+                            components={{
+                                code({node, inline, className, children, ...props}: any) {
+                                    return !inline ? (
+                                        <div style={{background: '#282c34', color: '#abb2bf', padding: '12px', borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace'}}>
+                                            <pre style={{margin: 0}}><code>{children}</code></pre>
+                                        </div>
+                                    ) : (
+                                        <code className={className} {...props}>{children}</code>
+                                    )
+                                }
+                            }}
+                        >
+                            {`\`\`\`python\n${data.content}\n\`\`\``}
+                        </ReactMarkdown>
+                    </Card>
+                );
+                setMessages(prev => [...prev, { role: 'agent', content: codeContent }]);
               }
               else if (eventType === 'result') {
                 setMessages(prev => {

@@ -66,7 +66,7 @@ class SemanticCache:
         # 生成 ID
         id = hashlib.md5(query.encode()).hexdigest()
         
-        self.collection.add(
+        self.collection.upsert(
             ids=[id],
             embeddings=[self._embed(query)],
             metadatas=[{"sql": sql, "query": query}]

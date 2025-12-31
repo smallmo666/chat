@@ -36,9 +36,10 @@ def table_qa_node(state: AgentState, config: dict = None) -> dict:
         "相关数据库 Schema:\n{schema_context}\n\n"
         "请遵循以下要求：\n"
         "1. **准确性**：只根据提供的 Schema 回答，不要编造字段或表。\n"
-        "2. **清晰性**：使用 Markdown 列表或表格清晰展示表名、字段名和注释。\n"
+        "2. **清晰性**：必须使用 **Markdown 表格** 清晰展示表名、字段名和注释，以便前端渲染。\n"
         "3. **专业性**：如果 Schema 中包含注释，请务必解释字段的业务含义。\n"
         "4. **范围**：如果用户问的问题超出 Schema 范围，请诚实回答“未在相关表中找到信息”。\n"
+        "5. **容错性**：如果用户使用的术语与 Schema 不完全一致（例如“库存” vs “stock_qty”），请尝试进行语义匹配并解释你的推断。\n"
     )
     
     chain = prompt | llm
