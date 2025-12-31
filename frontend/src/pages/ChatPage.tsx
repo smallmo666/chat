@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button } from 'antd';
+import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button, List, Space } from 'antd';
 import { Activity } from 'lucide-react';
-import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined } from '@ant-design/icons';
+import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined, SearchOutlined, BulbOutlined, BgColorsOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
@@ -15,6 +15,8 @@ import { SchemaProvider, useSchema } from '../context/SchemaContext';
 const { Content } = Layout;
 const { Title } = Typography;
 const { useBreakpoint } = Grid;
+
+import { ENDPOINTS } from '../config';
 
 const ChatPageContent: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -62,7 +64,7 @@ const ChatPageContent: React.FC = () => {
     ]);
 
     try {
-      const response = await fetch('http://localhost:8000/chat', {
+      const response = await fetch(ENDPOINTS.CHAT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -137,6 +139,78 @@ const ChatPageContent: React.FC = () => {
                     interrupt: true 
                 }]);
                 setIsLoading(false);
+              }
+              else if (eventType === 'detective_insight') {
+                  const { hypotheses, depth } = data;
+                  const insightContent = (
+                      <Card 
+                          size="small" 
+                          title={<Space><SearchOutlined style={{color: '#1677ff'}} /> 侦探思考 (模式: {depth === 'deep' ? '深度' : '快速'})</Space>} 
+                          style={{marginTop: 8, background: '#f0f5ff', borderColor: '#adc6ff'}}
+                      >
+                          <List
+                              size="small"
+                              dataSource={hypotheses}
+                              renderItem={(item: any) => (
+                                  <List.Item>
+                                      <Typography.Text>🕵️‍♂️ {item}</Typography.Text>
+                                  </List.Item>
+                              )}
+                          />
+                      </Card>
+                  );
+                  setMessages(prev => [...prev, { role: 'agent', content: insightContent, hypotheses, analysisDepth: depth }]);
+              }
+              else if (eventType === 'insight_mined') {
+                  const insights = data.content;
+                  const insightCard = (
+                      <Card 
+                          size="small" 
+                          title={<Space><BulbOutlined style={{color: '#faad14'}} /> 主动洞察发现</Space>} 
+                          style={{marginTop: 8, background: '#fffbe6', borderColor: '#ffe58f'}}
+                      >
+                           <List
+                              size="small"
+                              dataSource={insights}
+                              renderItem={(item: any) => (
+                                  <List.Item>
+                                      <Typography.Text>💡 {item}</Typography.Text>
+                                  </List.Item>
+                              )}
+                          />
+                      </Card>
+                  );
+                  setMessages(prev => [...prev, { role: 'agent', content: insightCard, insights }]);
+              }
+              else if (eventType === 'ui_generated') {
+                  const code = data.content;
+                  const uiCard = (
+                      <Card 
+                          size="small" 
+                          title={<Space><BgColorsOutlined style={{color: '#722ed1'}} /> 生成式 UI (React Code)</Space>} 
+                          style={{marginTop: 8, background: '#f9f0ff', borderColor: '#d3adf7'}}
+                      >
+                          <Typography.Paragraph type="secondary" style={{fontSize: 12}}>
+                              * 这是一个自动生成的 React 组件代码，可直接用于前端渲染。
+                          </Typography.Paragraph>
+                          <ReactMarkdown 
+                            components={{
+                                code({node, inline, className, children, ...props}: any) {
+                                    return !inline ? (
+                                        <div style={{background: '#282c34', color: '#abb2bf', padding: '12px', borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace'}}>
+                                            <pre style={{margin: 0}}><code>{children}</code></pre>
+                                        </div>
+                                    ) : (
+                                        <code className={className} {...props}>{children}</code>
+                                    )
+                                }
+                            }}
+                        >
+                            {`\`\`\`jsx\n${code}\n\`\`\``}
+                        </ReactMarkdown>
+                      </Card>
+                  );
+                  setMessages(prev => [...prev, { role: 'agent', content: uiCard, uiComponent: code }]);
               }
               else if (eventType === 'code_generated') {
                 const codeContent = (

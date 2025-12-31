@@ -3,14 +3,17 @@ import json
 import uuid
 import time
 from typing import AsyncGenerator, Optional
-from fastapi import APIRouter, StreamingResponse
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from src.workflow.graph import create_graph
 from src.core.database import get_app_db
-from src.core.models import AuditLog
+from src.core.models import AuditLog, User
 from src.utils.callbacks import UIStreamingCallbackHandler
 from src.api.schemas import ChatRequest
+# Import auth dependency
+from src.core.security_auth import get_current_active_user
 
 router = APIRouter(tags=["chat"])
 
@@ -29,6 +32,7 @@ async def event_generator(
     selected_tables: Optional[list[str]], 
     thread_id: str, 
     project_id: Optional[int],
+    user_id: Optional[int], # Added user_id
     command: str = "start",
     modified_sql: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
@@ -75,10 +79,12 @@ async def event_generator(
             # Audit Log Data Accumulator (Initialize with default or load from history if needed)
             audit_data = {
                 "project_id": project_id,
+                "user_id": user_id, # Record User ID
                 "session_id": thread_id,
                 "user_query": message,
                 "plan": [],
                 "executed_sql": None,
+                "generated_dsl": None, # 初始化 DSL
                 "result_summary": None,
                 "status": "success", 
                 "error_message": None,
@@ -106,7 +112,24 @@ async def event_generator(
                         "duration": duration
                     }
                     
-                    if node_name == "Planner":
+                    if node_name == "DataDetective":
+                        hypotheses = state_update.get("hypotheses", [])
+                        depth = state_update.get("analysis_depth", "simple")
+                        
+                        event_data["details"] = f"分析完成 (模式: {depth})"
+                        if hypotheses:
+                             # 发送专门的侦探洞察事件
+                             await queue.put({
+                                 "type": "detective_insight", 
+                                 "hypotheses": hypotheses,
+                                 "depth": depth
+                             })
+                             # 同时发送一条 AIMessage 结果给前端展示
+                             msgs = state_update.get("messages", [])
+                             if msgs and isinstance(msgs[-1], AIMessage):
+                                 await queue.put({"type": "result", "content": msgs[-1].content})
+
+                    elif node_name == "Planner":
                         plan = state_update.get("plan", [])
                         await queue.put({"type": "plan", "content": plan})
                         event_data["details"] = f"已生成 {len(plan)} 步执行计划"
@@ -140,6 +163,7 @@ async def event_generator(
                     elif node_name == "GenerateDSL":
                         dsl = state_update.get("dsl", "")
                         event_data["details"] = dsl
+                        audit_data["generated_dsl"] = dsl # 捕获 DSL
                         
                     elif node_name == "DSLtoSQL":
                         sql = state_update.get("sql", "")
@@ -161,27 +185,6 @@ async def event_generator(
                         msgs = state_update.get("messages", [])
                         if msgs and isinstance(msgs[-1], AIMessage):
                             await queue.put({"type": "result", "content": msgs[-1].content})
-                        
-                    elif node_name == "AnalysisViz":
-                        # 处理 AnalysisViz 并行节点的输出
-                        analysis = state_update.get("analysis", "")
-                        viz = state_update.get("visualization", {})
-                        
-                        if analysis:
-                            event_data["details"] = "数据分析完成"
-                            await queue.put({"type": "analysis", "content": analysis})
-                            
-                        if viz:
-                            event_data["details"] = "可视化生成完成"
-                            await queue.put({"type": "visualization", "content": viz})
-                        else:
-                            # 可能是表格或文本
-                            msgs = state_update.get("messages", [])
-                            if msgs and isinstance(msgs[-1], AIMessage):
-                                # 只有当没有专门的 visualization 对象时，才把最后的消息作为结果推下去
-                                # 否则 analysis 已经覆盖了文本部分
-                                if not analysis:
-                                    await queue.put({"type": "result", "content": msgs[-1].content})
 
                     elif node_name == "PythonAnalysis":
                         # 处理 Python 代码执行节点
@@ -200,11 +203,6 @@ async def event_generator(
                              if msgs and isinstance(msgs[-1], AIMessage):
                                  await queue.put({"type": "result", "content": msgs[-1].content})
 
-                    elif node_name == "DataAnalysis":
-                        analysis = state_update.get("analysis", "")
-                        event_data["details"] = "数据分析完成"
-                        await queue.put({"type": "analysis", "content": analysis})
-                        
                     elif node_name == "Visualization":
                         viz = state_update.get("visualization", {})
                         event_data["details"] = "可视化生成完成"
@@ -214,7 +212,21 @@ async def event_generator(
                             msgs = state_update.get("messages", [])
                             if msgs and isinstance(msgs[-1], AIMessage):
                                 await queue.put({"type": "result", "content": msgs[-1].content})
-                            
+
+                    elif node_name == "InsightMiner":
+                        # 处理 InsightMiner 的结果
+                        insights = state_update.get("insights", [])
+                        event_data["details"] = f"挖掘到 {len(insights)} 条洞察"
+                        if insights:
+                            await queue.put({"type": "insight_mined", "content": insights})
+
+                    elif node_name == "UIArtist":
+                        # 处理 UIArtist 的结果
+                        ui_component = state_update.get("ui_component", "")
+                        event_data["details"] = "UI 组件已生成"
+                        if ui_component:
+                            await queue.put({"type": "ui_generated", "content": ui_component})
+
                     elif node_name == "TableQA":
                         msgs = state_update.get("messages", [])
                         if msgs and isinstance(msgs[-1], AIMessage):
@@ -239,10 +251,12 @@ async def event_generator(
                 with app_db.get_session() as session:
                     log_entry = AuditLog(
                         project_id=audit_data["project_id"],
+                        user_id=audit_data["user_id"], # Save user_id
                         session_id=audit_data["session_id"],
                         user_query=audit_data["user_query"],
                         plan=audit_data["plan"],
                         executed_sql=audit_data["executed_sql"],
+                        generated_dsl=audit_data["generated_dsl"], # 保存 DSL
                         result_summary=audit_data["result_summary"],
                         duration_ms=total_duration,
                         status=audit_data["status"],
@@ -262,10 +276,12 @@ async def event_generator(
                 with app_db.get_session() as session:
                     log_entry = AuditLog(
                         project_id=audit_data.get("project_id"),
+                        user_id=audit_data.get("user_id"),
                         session_id=audit_data.get("session_id", "unknown"),
                         user_query=audit_data.get("user_query", ""),
                         plan=audit_data.get("plan"),
                         executed_sql=audit_data.get("executed_sql"),
+                        generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
                         result_summary="Cancelled",
                         duration_ms=total_duration,
                         status="cancelled",
@@ -285,10 +301,12 @@ async def event_generator(
                 with app_db.get_session() as session:
                     log_entry = AuditLog(
                         project_id=audit_data.get("project_id"),
+                        user_id=audit_data.get("user_id"),
                         session_id=audit_data.get("session_id", "unknown"),
                         user_query=audit_data.get("user_query", ""),
                         plan=audit_data.get("plan"),
                         executed_sql=audit_data.get("executed_sql"),
+                        generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
                         result_summary="Error",
                         duration_ms=total_duration,
                         status="error",
@@ -315,7 +333,10 @@ async def event_generator(
         yield f"data: {json.dumps(data)}\n\n"
 
 @router.post("/chat")
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_active_user) # Protected Route
+):
     thread_id = request.thread_id or str(uuid.uuid4())
     return StreamingResponse(
         event_generator(
@@ -323,6 +344,7 @@ async def chat_endpoint(request: ChatRequest):
             request.selected_tables, 
             thread_id, 
             request.project_id,
+            current_user.id, # Pass current user ID
             request.command,
             request.modified_sql
         ),

@@ -1,4 +1,5 @@
 import json
+import asyncio
 from typing import Optional, Literal
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -6,25 +7,25 @@ from pydantic import BaseModel, Field
 
 from src.workflow.state import AgentState
 from src.core.llm import get_llm
+from src.workflow.nodes.visualization_advisor import get_viz_advisor
 
-llm = None # Will be initialized in node
+llm = None # 将在节点内部初始化
 
 class TableData(BaseModel):
-    columns: list[str] = Field(..., description="List of column names")
-    data: list[dict] = Field(..., description="List of rows, each row is a dict")
+    columns: list[str] = Field(..., description="列名列表")
+    data: list[dict] = Field(..., description="数据行列表，每行为一个字典")
 
 class EChartsOption(BaseModel):
-    chart_type: Literal["echarts", "table"] = Field(..., description="The type of visualization: 'echarts' for charts, 'table' for data lists")
-    option: Optional[dict] = Field(None, description="The ECharts option dictionary (if chart_type is echarts)")
-    table_data: Optional[TableData] = Field(None, description="The table data (if chart_type is table)")
-    reason: str = Field(None, description="Reason if no visualization is generated")
-
-from src.workflow.nodes.visualization_advisor import get_viz_advisor
+    chart_type: Literal["echarts", "table"] = Field(..., description="可视化类型：'echarts' 表示图表，'table' 表示数据列表")
+    option: Optional[dict] = Field(None, description="ECharts 配置项字典（当 chart_type 为 echarts 时）")
+    table_data: Optional[TableData] = Field(None, description="表格数据（当 chart_type 为 table 时）")
+    reason: str = Field(None, description="如果未生成可视化，说明原因")
 
 async def visualization_node(state: AgentState, config: dict = None) -> dict:
     """
     可视化节点。
     结合规则推荐 (VisualizationAdvisor) 和 LLM 生成 ECharts 配置。
+    自动处理大数据集的降采样。
     """
     query = ""
     for msg in reversed(state["messages"]):
@@ -40,18 +41,37 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
     if not results or "Error" in results or "Empty" in results:
         return {"visualization": None}
 
-    # --- 1. 数据解析与规则推荐 (Fast Path) ---
-    parsed_data = []
-    try:
-        parsed_data = json.loads(results)
-        if not isinstance(parsed_data, list):
-            parsed_data = []
-    except:
-        pass
+    # --- 1. 数据解析与规则推荐 (异步快速路径) ---
+    MAX_DATA_POINTS = 2000
+
+    def _process_data_and_advise():
+        """在线程池中运行 CPU 密集型任务：JSON 解析、截断和 Pandas 分析"""
+        parsed_data = []
+        try:
+            parsed_data = json.loads(results)
+            if not isinstance(parsed_data, list):
+                parsed_data = []
+        except:
+            pass
+            
+        original_count = len(parsed_data)
+        is_truncated = False
         
-    advisor = get_viz_advisor()
-    advice = advisor.analyze_data(parsed_data)
-    print(f"DEBUG: Viz Advisor Recommendation: {advice['recommended_chart']} ({advice['reason']})")
+        if original_count > MAX_DATA_POINTS:
+            # 简单截断
+            parsed_data = parsed_data[:MAX_DATA_POINTS]
+            is_truncated = True
+            print(f"Visualization: Data truncated from {original_count} to {MAX_DATA_POINTS} points.")
+
+        advisor = get_viz_advisor()
+        # analyze_data 内部使用 pandas，属于 CPU 密集型
+        advice = advisor.analyze_data(parsed_data)
+        print(f"DEBUG: Viz Advisor Recommendation: {advice['recommended_chart']} ({advice['reason']})")
+        
+        return parsed_data, advice, is_truncated, original_count
+
+    # 异步执行数据处理
+    parsed_data, advice, is_truncated, original_count = await asyncio.to_thread(_process_data_and_advise)
     
     # 如果推荐是表格，直接返回，不浪费 LLM Token
     if advice["recommended_chart"] == "table" and parsed_data:
@@ -63,7 +83,9 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
                     "columns": columns,
                     "data": parsed_data
                 },
-                "reason": advice["reason"]
+                "reason": advice["reason"],
+                "is_truncated": is_truncated,
+                "original_count": original_count
             }
         }
     # ----------------------------------------------------
@@ -84,6 +106,7 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
         "3. **配置完整性**：\n"
         "   - 必须包含 title (text, subtext), tooltip (trigger: 'axis'), legend, grid, xAxis, yAxis。\n"
         "   - 针对 {recommended_chart} 类型优化样式（例如：折线图加 smooth: true，柱状图加 barMaxWidth）。\n"
+        "   - 如果数据量较大，建议开启 dataZoom 组件。\n"
         "4. **输出格式**：\n"
         "   - 仅返回 JSON 格式的 option 对象。\n"
     )
@@ -115,6 +138,11 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
             else:
                 # 覆盖 source 以确保数据完整
                 viz_data.option["dataset"]["source"] = parsed_data
+            
+            # 如果发生了截断，在 subtitle 中提示
+            if is_truncated:
+                current_subtext = viz_data.option.get("title", {}).get("subtext", "")
+                viz_data.option.setdefault("title", {})["subtext"] = f"{current_subtext} (仅展示前 {MAX_DATA_POINTS} 条，共 {original_count} 条)".strip()
                 
             return {"visualization": viz_data.dict()}
             
@@ -127,7 +155,9 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
                     "table_data": {
                         "columns": columns,
                         "data": parsed_data
-                    }
+                    },
+                    "is_truncated": is_truncated,
+                    "original_count": original_count
                 }
             }
             
@@ -145,7 +175,9 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
                         "columns": columns,
                         "data": parsed_data
                     },
-                    "reason": "Visualization generation failed, fallback to table."
+                    "reason": "Visualization generation failed, fallback to table.",
+                    "is_truncated": is_truncated,
+                    "original_count": original_count
                 }
             }
         return {"visualization": None}

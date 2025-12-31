@@ -11,7 +11,7 @@ class VisualizationAdvisor:
         分析数据特征并推荐图表。
         """
         if not data:
-            return {"recommended_chart": "none", "reason": "No data"}
+            return {"recommended_chart": "none", "reason": "无数据"}
             
         df = pd.DataFrame(data)
         
@@ -34,7 +34,7 @@ class VisualizationAdvisor:
         x_axis = None
         y_axis = None
         
-        # Rule 1: 趋势分析 (Time Series)
+        # 规则 1: 趋势分析 (时间序列)
         if datetime_cols and numeric_cols:
             recommendation = "line"
             if len(numeric_cols) > 1:
@@ -44,7 +44,7 @@ class VisualizationAdvisor:
             x_axis = datetime_cols[0]
             y_axis = numeric_cols
             
-        # Rule 2: 类别比较 (Bar Chart)
+        # 规则 2: 类别比较 (柱状图)
         elif category_cols and numeric_cols:
             # 如果类别太多，不适合柱状图，可能适合条形图
             unique_count = df[category_cols[0]].nunique()
@@ -60,7 +60,7 @@ class VisualizationAdvisor:
                 recommendation = "table"
                 reason = "类别过多，建议表格展示。"
                 
-        # Rule 3: 占比分析 (Pie Chart)
+        # 规则 3: 占比分析 (饼图)
         # 仅当只有1个类别列和1个数值列，且行数较少时
         if len(category_cols) == 1 and len(numeric_cols) == 1 and len(df) <= 8:
             recommendation = "pie"
@@ -80,7 +80,7 @@ class VisualizationAdvisor:
             }
         }
 
-# Global Instance
+# 全局实例
 _advisor = VisualizationAdvisor()
 
 def get_viz_advisor():

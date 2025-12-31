@@ -1,65 +1,55 @@
 version: '3.8'
 
 services:
+  # 1. 数据库 (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-text2sql}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # 2. 缓存 (Redis)
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # 3. 后端 (FastAPI)
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.backend
-    ports:
-      - "8000:8000"
+      dockerfile: docker/backend.Dockerfile
+    restart: always
     environment:
-      - APP_DB_HOST=mysql
-      - APP_DB_PORT=3306
-      - APP_DB_USER=root
-      - APP_DB_PASSWORD=root
-      - APP_DB_NAME=text2sql_app
-      - REDIS_HOST=redis
-      - PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin}@db:5432/${POSTGRES_DB:-text2sql}
+      - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
-      - mysql
+      - db
       - redis
-      - phoenix
-    volumes:
-      - ./src:/app/src
-      - ./chroma_db:/app/chroma_db
+    ports:
+      - "8000:8000"
 
+  # 4. 前端 (React + Nginx)
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+    restart: always
     ports:
-      - "8080:80"
+      - "80:80"
     depends_on:
       - backend
-
-  mysql:
-    image: mysql:8.0
-    environment:
-      - MYSQL_ROOT_PASSWORD=root
-      - MYSQL_DATABASE=text2sql_app
-    ports:
-      - "3306:3306"
+    # 将 nginx.conf 挂载进去 (方便开发时热更配置，生产环境建议 COPY)
     volumes:
-      - mysql_data:/var/lib/mysql
-
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-
-  phoenix:
-    image: arizephoenix/phoenix:latest
-    ports:
-      - "6006:6006"
-      - "4317:4317"
-    environment:
-      - PHOENIX_PORT=6006
-      - PHOENIX_GRPC_PORT=4317
+       - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf
 
 volumes:
-  mysql_data:
-  redis_data:
+  postgres_data:

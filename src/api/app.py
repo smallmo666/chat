@@ -2,16 +2,18 @@ import warnings
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from phoenix.trace.langchain import LangChainInstrumentor
+from phoenix.otel import register
+from openinference.instrumentation.langchain import LangChainInstrumentor
 
 from src.core.database import get_app_db
 from src.workflow.graph import create_graph
 
 # Setup Phoenix Tracing
 # This will instrument all LangChain runs within this process
-LangChainInstrumentor().instrument()
+tracer_provider = register()
+LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
 
-from src.api.routes import datasource, project, audit, chat, llm
+from src.api.routes import datasource, project, audit, chat, llm, auth, feedback # Added feedback
 
 # Ignore warnings
 warnings.filterwarnings("ignore")
@@ -33,6 +35,8 @@ app.include_router(project.router)
 app.include_router(audit.router)
 app.include_router(chat.router)
 app.include_router(llm.router)
+app.include_router(auth.router)
+app.include_router(feedback.router) # Registered feedback
 
 @app.on_event("startup")
 async def startup_event():

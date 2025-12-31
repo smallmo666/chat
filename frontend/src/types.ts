@@ -5,6 +5,12 @@ export interface Message {
     data?: any[];
     vizOption?: any; // ECharts option for dashboard pinning
     interrupt?: boolean; // HITL flag
+    
+    // V2.0 New Fields
+    hypotheses?: string[];
+    analysisDepth?: 'simple' | 'deep';
+    insights?: string[];
+    uiComponent?: string;
 }
 
 export type TaskItem = {

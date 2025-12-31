@@ -2,6 +2,8 @@ import chromadb
 from typing import List, Dict, Any
 from sqlalchemy import text
 from src.core.database import get_query_db
+import asyncio
+import threading
 
 class ValueSearcher:
     """
@@ -23,7 +25,7 @@ class ValueSearcher:
         except Exception as e:
             print(f"Failed to init ValueSearcher vector db: {e}")
 
-    def index_values(self, tables: List[str] = None, limit_per_column: int = 1000):
+    async def index_values(self, tables: List[str] = None, limit_per_column: int = 1000):
         """
         扫描数据库中的文本列，构建值索引。
         :param tables: 指定要扫描的表名列表，如果为 None 则扫描所有表。
@@ -37,9 +39,15 @@ class ValueSearcher:
             # 获取所有表结构
             # 简化起见，这里假设我们能获取所有表名
             # 在实际生产中，应从 SchemaSearcher 或元数据中获取
-            inspector = query_db.inspect_schema() # 返回 JSON 字符串
+            # 使用同步的 _get_sync_engine 或 inspect_schema
+            # 这里的 inspect_schema 已经是同步包装了，可以直接用
+            
+            # 由于 inspect_schema 内部创建了临时 engine，我们应该尽量减少调用次数
+            # 或者将其重构为异步 (目前数据库层只有 inspect_schema 是 sync 的)
+            # 为了不阻塞，我们在 thread 中运行 inspect_schema
+            inspector_json = await asyncio.to_thread(query_db.inspect_schema)
             import json
-            schema = json.loads(inspector)
+            schema = json.loads(inspector_json)
             
             target_tables = tables if tables else schema.keys()
             
@@ -47,46 +55,72 @@ class ValueSearcher:
             documents = []
             metadatas = []
             
-            with query_db.engine.connect() as conn:
-                for table in target_tables:
-                    if table not in schema: continue
+            # 使用异步连接
+            async with query_db.async_engine.connect() as conn:
+                for table_full_name in target_tables:
+                    # schema keys are "db.table"
+                    if table_full_name not in schema: continue
                     
+                    # 提取纯表名用于 SQL (假设在同一个库或已处理上下文)
+                    # 注意：schema key 是 "db.table"，SQL 需要根据情况处理
+                    # 这里简化处理，直接使用 full name 或者 split
+                    # async_engine 连接的是特定库，如果跨库会比较麻烦
+                    # 假设 target_tables 都在当前连接的库中
+                    
+                    # 尝试从 full name 解析
+                    if "." in table_full_name:
+                        _, table_name = table_full_name.split(".", 1)
+                    else:
+                        table_name = table_full_name
+
                     # 获取该表的文本列
-                    columns = schema[table]
+                    columns = schema[table_full_name]
                     if isinstance(columns, dict): columns = columns.get("columns", [])
                     
                     text_columns = [col['name'] for col in columns if 'char' in col['type'].lower() or 'text' in col['type'].lower()]
                     
                     for col in text_columns:
-                        print(f"Indexing values for {table}.{col}...")
+                        print(f"Indexing values for {table_full_name}.{col}...")
                         # 查询去重值
                         try:
                             # 简单的 SQL 防注入处理：使用 text()
-                            sql = text(f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL LIMIT {limit_per_column}")
-                            result = conn.execute(sql)
-                            values = [str(row[0]) for row in result]
+                            # 加上表名引用
+                            sql = text(f"SELECT DISTINCT {col} FROM {table_name} WHERE {col} IS NOT NULL LIMIT {limit_per_column}")
+                            result = await conn.execute(sql)
+                            rows = result.fetchall()
+                            values = [str(row[0]) for row in rows]
                             
                             for val in values:
                                 if len(val) < 2 or len(val) > 100: continue # 过滤过短或过长的值
                                 
                                 # ID: table.col.hash(val)
-                                doc_id = f"{table}.{col}.{hash(val)}"
+                                doc_id = f"{table_full_name}.{col}.{hash(val)}"
                                 
                                 ids.append(doc_id)
                                 documents.append(val)
-                                metadatas.append({"table": table, "column": col, "value": val})
+                                metadatas.append({"table": table_full_name, "column": col, "value": val})
                                 
                         except Exception as e:
-                            print(f"Error indexing {table}.{col}: {e}")
+                            print(f"Error indexing {table_full_name}.{col}: {e}")
 
             if ids:
                 print(f"Adding {len(ids)} values to vector index...")
                 batch_size = 500
+                
+                def _add_batch(batch_ids, batch_docs, batch_metas):
+                     self._collection.add(
+                        ids=batch_ids,
+                        documents=batch_docs,
+                        metadatas=batch_metas
+                    )
+
                 for i in range(0, len(ids), batch_size):
-                    self._collection.add(
-                        ids=ids[i:i+batch_size],
-                        documents=documents[i:i+batch_size],
-                        metadatas=metadatas[i:i+batch_size]
+                    # 使用 to_thread 异步执行同步的 collection.add
+                    await asyncio.to_thread(
+                        _add_batch,
+                        ids[i:i+batch_size],
+                        documents[i:i+batch_size],
+                        metadatas[i:i+batch_size]
                     )
                 print("Value indexing complete.")
                 
@@ -123,10 +157,14 @@ class ValueSearcher:
 
 # 全局缓存
 _value_searchers = {}
+_value_searcher_lock = threading.Lock() # 全局锁
 
 def get_value_searcher(project_id: int = None):
     global _value_searchers
     key = project_id or "default"
+    # Double-checked locking
     if key not in _value_searchers:
-        _value_searchers[key] = ValueSearcher(project_id)
+        with _value_searcher_lock:
+            if key not in _value_searchers:
+                _value_searchers[key] = ValueSearcher(project_id)
     return _value_searchers[key]

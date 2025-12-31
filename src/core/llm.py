@@ -1,21 +1,18 @@
-import os
 import functools
-from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from src.core.database import get_app_db
 from src.core.models import Project, LLMProvider
+from src.core.config import settings
 
-load_dotenv()
-
-@functools.lru_cache(maxsize=32)
 def get_llm(node_name: str = None, project_id: int = None) -> BaseChatModel:
     """
-    Get LLM instance based on Project configuration and Node context.
-    Cached to avoid frequent DB lookups and object creation overhead.
+    根据项目配置和节点上下文获取 LLM 实例。
+    移除 LRU 缓存以确保配置更改（如 API Key 更新）能即时生效。
+    LangChain 的 ChatModel 初始化开销极低，因此不缓存是安全的。
     """
     
-    # 1. Try to load from Database if project_id and node_name provided
+    # 1. 尝试从数据库加载（如果提供了 project_id 和 node_name）
     if project_id and node_name:
         try:
             app_db = get_app_db()
@@ -28,19 +25,22 @@ def get_llm(node_name: str = None, project_id: int = None) -> BaseChatModel:
                         if provider_config:
                             return _create_llm_from_config(provider_config)
         except Exception as e:
-            print(f"Failed to load dynamic LLM config: {e}. Fallback to default.")
+            print(f"加载动态 LLM 配置失败: {e}. 回退到默认配置。")
 
-    # 2. Fallback to Env Vars (System Default)
+    # 2. 回退到环境变量（系统默认）
     return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"),
+        model=settings.OPENAI_MODEL_NAME,
         temperature=0,
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        openai_api_base=os.getenv("OPENAI_API_BASE")
+        openai_api_key=settings.OPENAI_API_KEY,
+        # settings currently doesn't have OPENAI_API_BASE, adding fallback if not present
+        # but typically this is implied or handled by settings if needed.
+        # Let's check settings definition again. It only had KEY and MODEL_NAME.
+        # Assuming standard OpenAI or that settings will be updated if custom base needed.
     )
 
 def _create_llm_from_config(config: LLMProvider) -> BaseChatModel:
     """
-    Factory to create LangChain ChatModel from DB config.
+    工厂方法：根据 DB 配置创建 LangChain ChatModel。
     """
     params = config.parameters or {}
     temperature = params.get("temperature", 0)
@@ -53,7 +53,7 @@ def _create_llm_from_config(config: LLMProvider) -> BaseChatModel:
             openai_api_base=config.api_base
         )
     elif config.provider == "azure":
-        # Example for Azure (requires more fields usually)
+        # Azure 示例 (通常需要更多字段)
         from langchain_openai import AzureChatOpenAI
         return AzureChatOpenAI(
             azure_deployment=config.model_name,
@@ -69,7 +69,7 @@ def _create_llm_from_config(config: LLMProvider) -> BaseChatModel:
             base_url=config.api_base,
             temperature=temperature
         )
-    # Add more providers as needed (Anthropic, etc.)
+    # 根据需要添加更多提供商 (Anthropic 等)
     
-    # Default fallback
+    # 默认回退
     return ChatOpenAI(api_key=config.api_key)

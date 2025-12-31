@@ -5,11 +5,17 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import select
 
 from src.core.database import get_app_db, AppDatabase
-from src.core.models import User
-from src.core.security import verify_password, get_password_hash, create_access_token
-from src.api.deps import get_current_user
+from src.core.models import User, Organization, OrganizationMember
+from src.core.config import settings
+from src.core.security_auth import (
+    verify_password, 
+    get_password_hash, 
+    create_access_token, 
+    get_current_user
+)
+from datetime import timedelta
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"]) 
 
 class UserCreate(BaseModel):
     username: str
@@ -37,6 +43,7 @@ def register(user_in: UserCreate, app_db: AppDatabase = Depends(get_app_db)):
                 detail="Username already registered"
             )
         
+        # Create User
         db_user = User(
             username=user_in.username,
             email=user_in.email,
@@ -46,6 +53,19 @@ def register(user_in: UserCreate, app_db: AppDatabase = Depends(get_app_db)):
         session.add(db_user)
         session.commit()
         session.refresh(db_user)
+        
+        # Multi-Tenancy: Create Default Organization for the user
+        org_name = f"{user_in.username}'s Workspace"
+        org = Organization(name=org_name, owner_id=db_user.id)
+        session.add(org)
+        session.commit()
+        session.refresh(org)
+        
+        # Add user as admin of their own org
+        member = OrganizationMember(organization_id=org.id, user_id=db_user.id, role="admin")
+        session.add(member)
+        session.commit()
+        
         return db_user
 
 @router.post("/login", response_model=Token)
@@ -62,7 +82,12 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), app_db: AppDatabase 
         if not user.is_active:
              raise HTTPException(status_code=400, detail="Inactive user")
              
-        access_token = create_access_token(subject=str(user.id))
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        # Include uid in the token payload
+        access_token = create_access_token(
+            data={"sub": user.username, "uid": user.id}, 
+            expires_delta=access_token_expires
+        )
         return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserRead)

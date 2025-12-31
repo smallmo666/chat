@@ -1,5 +1,6 @@
 import chromadb
 import uuid
+import threading
 from typing import List, Dict, Any
 
 class FewShotRetriever:
@@ -15,10 +16,11 @@ class FewShotRetriever:
 
     def _init_vector_db(self):
         try:
-            self._chroma_client = chromadb.Client()
+            # 使用持久化客户端，与 ValueSearcher 保持一致
+            self._chroma_client = chromadb.PersistentClient(path="./chroma_db_fewshot")
             # 每个项目使用独立的 Collection，或者是全局共享的 "common_examples"
             collection_name = f"few_shot_examples_{self.project_id}" if self.project_id else "few_shot_examples_common"
-            self._collection = self._chroma_client.create_collection(name=collection_name, get_or_create=True)
+            self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
             print(f"FewShotRetriever initialized for collection: {collection_name}")
         except Exception as e:
             print(f"Failed to init FewShotRetriever: {e}")
@@ -90,10 +92,13 @@ class FewShotRetriever:
 
 # 全局缓存
 _retrievers = {}
+_retriever_lock = threading.Lock()
 
 def get_few_shot_retriever(project_id: int = None):
     global _retrievers
     key = project_id or "default"
     if key not in _retrievers:
-        _retrievers[key] = FewShotRetriever(project_id)
+        with _retriever_lock:
+            if key not in _retrievers:
+                _retrievers[key] = FewShotRetriever(project_id)
     return _retrievers[key]

@@ -1,25 +1,26 @@
+import re
+import asyncio
 from langchain_core.prompts import ChatPromptTemplate
 from src.workflow.state import AgentState
 from src.core.llm import get_llm
-from src.core.database import get_app_db
-from src.domain.schema.value import get_value_searcher
-import json
-
-llm = None # Will be initialized in node
+from src.core.database import get_query_db
 
 # --- Prompts ---
 BASE_SYSTEM_PROMPT = """
-你是一位 SQL 专家。将以下的 JSON DSL 转换为 MySQL 查询语句。
-数据库 Schema 信息如下:
+你是一位 SQL 专家。请将以下的 JSON DSL 转换为标准的 {dialect} 查询语句。
+数据库 Schema:
 {schema_info}
 
-{value_hints}
-
-仅返回 SQL 字符串，不要包含 Markdown 格式。
+规则:
+1. 仅返回 SQL 字符串。不要包含 Markdown 或任何解释。
+2. 使用标准的 {dialect} 语法。
+   - 如果是 PostgreSQL，请使用双引号 `"` 包裹表名和列名（如果需要）。
+   - 如果是 MySQL，请使用反引号 ` ` ` 包裹表名和列名。
+3. 相信 DSL 中的值，它们已经被修正过了。
 """
 
-def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
-    print("DEBUG: Entering dsl_to_sql_node")
+async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
+    print("DEBUG: Entering dsl_to_sql_node (Async)")
     try:
         project_id = config.get("configurable", {}).get("project_id") if config else None
         llm = get_llm(node_name="DSLtoSQL", project_id=project_id)
@@ -27,91 +28,66 @@ def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         dsl = state.get("dsl")
         print(f"DEBUG: dsl_to_sql_node input dsl: {dsl}")
         
-        # --- Entity Linking / Value Correction ---
-        value_hints = ""
+        # 1. 获取数据库类型 (Dialect)
+        db_type = "MySQL" # 默认
         try:
-            # 预处理 DSL 字符串，尝试清理 Markdown
-            clean_dsl = dsl
-            if "```json" in clean_dsl:
-                clean_dsl = clean_dsl.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_dsl:
-                clean_dsl = clean_dsl.split("```")[1].split("```")[0].strip()
-                
-            dsl_json = json.loads(clean_dsl)
-            filters = dsl_json.get("filters", [])
-            
-            project_id = config.get("configurable", {}).get("project_id")
-            value_searcher = get_value_searcher(project_id)
-            
-            hints = []
-            for f in filters:
-                if isinstance(f, dict) and "value" in f and isinstance(f["value"], str):
-                    val = f["value"]
-                    # 只有当值看起来像是一个模糊实体时才搜索 (简单的启发式：长度>1)
-                    if len(val) > 1:
-                        matches = value_searcher.search_similar_values(val, limit=3)
-                        if matches:
-                            match_strs = [f"'{m['value']}' (in {m['table']}.{m['column']})" for m in matches]
-                            hints.append(f"用户输入值 '{val}' 可能对应数据库中的: {', '.join(match_strs)}")
-            
-            if hints:
-                value_hints = "\n\n**实体链接建议 (Entity Linking Hints)**:\n" + "\n".join(hints) + "\n请优先使用上述建议中的精确值替换 DSL 中的模糊值。"
-                print(f"DEBUG: Generated Entity Linking hints: {len(hints)} items")
-                
+            query_db = get_query_db(project_id)
+            if query_db.type == "postgresql":
+                db_type = "PostgreSQL"
+            elif query_db.type == "mysql":
+                db_type = "MySQL"
         except Exception as e:
-            print(f"DEBUG: Entity Linking failed (non-fatal): {e}")
-        # -----------------------------------------
-        
-        # 获取数据库 Schema 信息
+            print(f"DEBUG: Failed to detect DB type, defaulting to MySQL: {e}")
+
+        # 2. Schema 信息获取 (增强版)
         schema_info = state.get("relevant_schema", "")
-        
         if not schema_info:
-            print("DEBUG: No relevant_schema found in dsl_to_sql_node")
+            print("DEBUG: No relevant_schema found in state, attempting fallback inspection...")
             try:
-                app_db = get_app_db()
-                full_schema_json = app_db.get_stored_schema_info()
-                if len(full_schema_json) > 5000:
-                    schema_info = full_schema_json[:5000] + "\n...(truncated)"
+                # 使用 run_in_executor 或 to_thread 避免阻塞
+                # inspect_schema 目前是同步方法（内部创建临时 engine）
+                schema_json = await asyncio.to_thread(query_db.inspect_schema)
+                
+                # 简单截断以防 Context Window 溢出
+                # 更好的做法是基于 Token 计算，这里先用字符长度兜底
+                if len(schema_json) > 10000:
+                    schema_info = schema_json[:10000] + "\n...(truncated)"
                 else:
-                    schema_info = full_schema_json
+                    schema_info = schema_json
             except Exception as e:
+                print(f"DEBUG: Schema inspection failed: {e}")
                 schema_info = "Schema info unavailable"
         
-        # 动态构建系统提示词
+        # 3. 构建 Prompt
         system_prompt = BASE_SYSTEM_PROMPT
 
-        # --- Retry Logic: Error Context ---
+        # 重试逻辑：错误上下文
         error = state.get("error")
         if error:
             print(f"DEBUG: DSLtoSQL - Injecting error context: {error}")
-            system_prompt += f"\n\n!!! 重要提示 !!!\n上一次生成的 SQL 执行错误：\n{error}\n请根据错误信息修正 SQL（例如：修复语法错误、列名错误）。"
-        # ----------------------------------
+            system_prompt += f"\n\n!!! 严重警告 !!!\n上一次生成的 SQL 导致了错误:\n{error}\n请根据错误修复 SQL (例如: 修复语法错误或列名错误)。"
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("human", "{dsl}")
-        ]).partial(schema_info=schema_info, value_hints=value_hints)
+        ]).partial(schema_info=schema_info, dialect=db_type)
         
         chain = prompt | llm
         
-        # 传递 config 给 invoke 以传播回调
-        invoke_args = {"dsl": dsl}
-        print("DEBUG: Invoking LLM for SQL generation...")
-        if config:
-            result = chain.invoke(invoke_args, config=config)
-        else:
-            result = chain.invoke(invoke_args)
+        print(f"DEBUG: Invoking LLM for SQL generation (Dialect: {db_type})...")
+        # 异步调用 LLM
+        result = await chain.ainvoke({"dsl": dsl}, config=config)
         
         sql = result.content.strip()
         print(f"DEBUG: SQL generated: {sql}")
         
-        # 清理可能存在的 markdown 代码块标记
-        if "```sql" in sql:
-            sql = sql.split("```sql")[1].split("```")[0].strip()
-        elif "```" in sql:
-            sql = sql.split("```")[1].split("```")[0].strip()
+        # 清理 Markdown
+        match = re.search(r"```(?:\w+)?\s*(.*?)\s*```", sql, re.DOTALL)
+        if match:
+            sql = match.group(1).strip()
             
         return {"sql": sql}
+        
     except Exception as e:
         print(f"ERROR in dsl_to_sql_node: {e}")
         import traceback

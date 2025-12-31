@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 import chromadb
+import threading
 
 # 加载环境变量
 load_dotenv()
@@ -110,9 +111,12 @@ class LongTermMemory:
 
 # 全局单例
 memory_instance = None
+memory_lock = threading.Lock()
 
 def get_memory():
     global memory_instance
     if memory_instance is None:
-        memory_instance = LongTermMemory()
+        with memory_lock:
+            if memory_instance is None:
+                memory_instance = LongTermMemory()
     return memory_instance

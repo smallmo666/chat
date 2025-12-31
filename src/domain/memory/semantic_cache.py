@@ -1,5 +1,6 @@
 import os
 import hashlib
+import threading
 from typing import Optional, List
 from sentence_transformers import SentenceTransformer
 import chromadb
@@ -74,9 +75,12 @@ class SemanticCache:
 
 # Factory/Singleton
 _cache_instances = {}
+_cache_lock = threading.Lock()
 
 def get_semantic_cache(project_id: int = None) -> SemanticCache:
     key = str(project_id)
     if key not in _cache_instances:
-        _cache_instances[key] = SemanticCache(project_id)
+        with _cache_lock:
+            if key not in _cache_instances:
+                _cache_instances[key] = SemanticCache(project_id)
     return _cache_instances[key]

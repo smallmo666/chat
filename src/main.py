@@ -58,16 +58,21 @@ def create_ui_layout(plan_steps: List[Dict[str, str]], thinking_text: str = "") 
     return Group(*panels)
 
 async def main():
-    console.print(Panel("[bold green]正在初始化 Text2SQL 智能体...[/bold green]", expand=False))
+    console.print(Panel("[bold green]正在初始化 Text2SQL 智能体 (Swarm Edition)...[/bold green]", expand=False))
     
     # Initialization
     try:
-        with console.status("[bold green]正在连接数据库并同步 Schema...[/bold green]"):
+        with console.status("[bold green]正在连接数据库...[/bold green]"):
+            # 只做连接检查，不强制全量 Schema 同步，避免启动过慢
             query_db = get_query_db()
             app_db = get_app_db()
-            query_db.ensure_demo_data()
-            schema_info = query_db.inspect_schema()
-            app_db.save_schema_info(schema_info)
+            # 简单的连通性测试
+            await query_db.run_query_async("SELECT 1")
+            
+            # (Optional) Save basic schema info if needed, but skip full inspection for speed
+            # schema_info = query_db.inspect_schema()
+            # app_db.save_schema_info(schema_info)
+            
         console.print("[bold green]✅ 系统初始化完成！[/bold green]")
     except Exception as e:
         console.print(f"[bold red]❌ 初始化失败: {e}[/bold red]")
@@ -75,20 +80,17 @@ async def main():
         
     app = create_graph()
     thread_id = str(uuid.uuid4())
-    # 增加递归限制
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
     
     console.print(f"[dim]会话 ID: {thread_id}[/dim]")
     console.print(Panel("[bold yellow]欢迎使用 Text2SQL 助手！[/bold yellow]\n请输入您的查询，输入 'exit' 退出。", expand=False))
     
-    # Global state for thinking text (shared with callback)
+    # Global state for thinking text
     thinking_state = {"text": ""}
     
     def update_thinking(text: str):
         thinking_state["text"] = text
 
-    # Add callback to config
-    # Note: app.astream accepts config, and callbacks in config should propagate to models
     config["callbacks"] = [UIStreamingCallbackHandler(update_thinking)]
 
     while True:
@@ -103,23 +105,21 @@ async def main():
                 console.print("[bold yellow]再见！[/bold yellow]")
                 break
             
-            # Initial Plan Template
+            # Dynamic Plan Template - Updated for Swarm Architecture
+            # We start with high-level phases, detailed steps will be filled by 'Planner' node
             plan_steps = [
-                {"id": "ClarifyIntent", "name": "1. 意图分析", "status": "pending", "detail": ""},
-                {"id": "GenerateDSL", "name": "2. 生成 DSL", "status": "pending", "detail": ""},
-                {"id": "DSLtoSQL", "name": "3. 生成 SQL", "status": "pending", "detail": ""},
-                {"id": "ExecuteSQL", "name": "4. 执行查询", "status": "pending", "detail": ""},
+                {"id": "CacheCheck", "name": "0. 缓存检查", "status": "pending", "detail": ""},
+                {"id": "DataDetective", "name": "1. 侦探分析", "status": "pending", "detail": ""},
+                {"id": "Planner", "name": "2. 任务规划", "status": "pending", "detail": ""},
+                {"id": "Supervisor", "name": "3. 任务执行", "status": "pending", "detail": "等待调度..."},
             ]
             
             thinking_state["text"] = ""
-            
             inputs = {"messages": [HumanMessage(content=user_input)]}
             
             # Start Live Display
-            # Use refresh_per_second=10 to auto-update based on current state
             with Live(create_ui_layout(plan_steps, thinking_state["text"]), refresh_per_second=10, console=console) as live:
                 
-                # Background task to refresh UI continuously during stream
                 async def refresh_ui_loop():
                     while True:
                         live.update(create_ui_layout(plan_steps, thinking_state["text"]))
@@ -128,47 +128,43 @@ async def main():
                 refresh_task = asyncio.create_task(refresh_ui_loop())
                 
                 def update_step(step_id, status, detail=""):
+                    found = False
                     for step in plan_steps:
                         if step["id"] == step_id:
                             step["status"] = status
                             if detail:
                                 step["detail"] = detail
-                    # Immediate update
+                            found = True
+                    
+                    # If step not found (e.g. dynamically added by Planner), add it
+                    if not found and step_id not in ["Supervisor", "FINISH"]:
+                         plan_steps.append({"id": step_id, "name": step_id, "status": status, "detail": detail})
+                         
                     live.update(create_ui_layout(plan_steps, thinking_state["text"]))
 
                 try:
-                    # Use app.astream (standard) instead of astream_events
                     async for output in app.astream(inputs, config=config):
-                        # output is a dict of {NodeName: StateUpdate}
                         for node_name, state_update in output.items():
                             
-                            # Update Plan Status based on Node completion
-                            if node_name == "ClarifyIntent":
-                                intent_clear = state_update.get("intent_clear", False)
-                                if intent_clear:
-                                    update_step("ClarifyIntent", "completed", "意图清晰")
-                                else:
-                                    update_step("ClarifyIntent", "completed", "需要澄清")
-                                    # Handle clarification message
-                                    msgs = state_update.get("messages", [])
-                                    if msgs and isinstance(msgs[-1], AIMessage):
-                                        live.stop()
-                                        console.print(Panel(f"[bold yellow]Agent:[/bold yellow] {msgs[-1].content}", title="需确认"))
-                                        live.start()
-
-                            elif node_name == "GenerateDSL":
-                                update_step("ClarifyIntent", "completed", "意图清晰") # Ensure previous
-                                dsl = state_update.get("dsl", "")
-                                display_dsl = (dsl[:30] + '...') if len(dsl) > 30 else dsl
-                                update_step("GenerateDSL", "completed", display_dsl)
-
-                            elif node_name == "DSLtoSQL":
-                                update_step("GenerateDSL", "completed")
-                                sql = state_update.get("sql", "")
-                                update_step("DSLtoSQL", "completed", sql)
+                            # Update Status based on Node
+                            if node_name == "CacheCheck":
+                                update_step("CacheCheck", "completed", "检查完毕")
+                                
+                            elif node_name == "DataDetective":
+                                update_step("CacheCheck", "completed") # Ensure prev
+                                update_step("DataDetective", "completed", "分析完成")
+                                
+                            elif node_name == "Planner":
+                                update_step("DataDetective", "completed")
+                                plan = state_update.get("plan", [])
+                                update_step("Planner", "completed", f"生成 {len(plan)} 步计划")
+                                # Optional: Dynamically expand plan_steps based on plan
+                                
+                            elif node_name == "Supervisor":
+                                next_node = state_update.get("next")
+                                update_step("Supervisor", "running", f"调度 -> {next_node}")
 
                             elif node_name == "ExecuteSQL":
-                                update_step("DSLtoSQL", "completed")
                                 result = state_update.get("results", "执行完成")
                                 update_step("ExecuteSQL", "completed", "查询成功")
                                 
@@ -179,7 +175,18 @@ async def main():
                                     console.print(msgs[-1].content)
                                     live.start()
                             
-                            # Reset thinking text for next step (optional, or keep accumulating)
+                            elif node_name in ["ClarifyIntent", "GenerateDSL", "DSLtoSQL", "CorrectSQL", "Visualization", "PythonAnalysis", "InsightMiner", "UIArtist"]:
+                                # Generic handler for worker nodes
+                                update_step(node_name, "completed", "执行完成")
+                                
+                                # Show result if available
+                                msgs = state_update.get("messages", [])
+                                if msgs and isinstance(msgs[-1], AIMessage):
+                                     content = msgs[-1].content
+                                     if len(content) < 200: # Only show short messages
+                                         update_step(node_name, "completed", content)
+
+                            # Reset thinking text
                             thinking_state["text"] = ""
                             
                 finally:
