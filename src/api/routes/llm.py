@@ -5,7 +5,7 @@ from sqlmodel import select
 from src.core.database import get_app_db, AppDatabase
 from src.core.models import LLMProvider, User
 from src.api.schemas_llm import LLMProviderCreate, LLMProviderRead
-from src.api.deps import get_current_user
+from src.core.security_auth import get_current_user
 
 router = APIRouter(prefix="/api/llms", tags=["llm"])
 

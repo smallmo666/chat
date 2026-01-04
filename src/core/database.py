@@ -243,12 +243,16 @@ class DatabaseProvider:
         return self._app_db
     
     def get_query_db(self, project_id: int = None) -> QueryDatabase:
+        """
+        获取项目对应的查询数据库连接。
+        必须提供 project_id。
+        """
         ds_key = "default"
         
         # 1. 尝试从缓存获取 ds_key
         if project_id and project_id in self._project_ds_cache:
             ds_key = self._project_ds_cache[project_id]
-            # 确认该 key 对应的 engine 是否存在，如果不存在（可能被清理），则需要重新加载
+            # 确认该 key 对应的 engine 是否存在
             if ds_key in self._query_engines:
                 return self._query_engines[ds_key]
         
@@ -269,27 +273,41 @@ class DatabaseProvider:
                 print(f"获取项目 {project_id} 的数据源出错: {e}")
         
         if not datasource:
-            # 如果是回退情况，或者无法从 DB 获取
+            # 回退检查
             if ds_key != "default" and ds_key in self._query_engines:
-                 # 缓存命中了 Key 但 Engine 还在? (理论上不会走到这，除非 cache 逻辑有误)
+                 # 缓存命中了 Key 但 Engine 还在
                  pass
             else:
-                # Use environment variables as fallback for default Query DB
-                datasource = DataSource(
-                    name="default_env",
-                    type="postgresql", 
-                    host=os.getenv("QUERY_DB_HOST", "localhost"),
-                    port=int(os.getenv("QUERY_DB_PORT", "5432")),
-                    user=os.getenv("QUERY_DB_USER", "postgres"),
-                    password=os.getenv("QUERY_DB_PASSWORD", ""),
-                    dbname=os.getenv("QUERY_DB_NAME", "postgres")
-                )
-                ds_key = "default_env"
+                # 严格禁止自动回退到测试库或默认环境
+                # 如果没有有效的 Project ID 或 DataSource，必须报错
+                raise ValueError("无法获取查询数据库：未提供有效的 Project ID 或未找到对应的数据源配置。")
 
         # 3. 初始化 Engine 并缓存
         if ds_key not in self._query_engines:
              self._query_engines[ds_key] = QueryDatabase(datasource)
         
+        return self._query_engines[ds_key]
+
+    def get_test_query_db(self) -> QueryDatabase:
+        """
+        专门用于获取测试评估用的数据库连接。
+        仅供 Evaluator 使用，严禁在生产路径调用。
+        """
+        ds_key = "test_eval_db"
+        
+        if ds_key not in self._query_engines:
+             print("⚠️ 正在初始化测试查询数据库 (Test Query DB)...")
+             datasource = DataSource(
+                 name="test_eval_db",
+                 type="postgresql", 
+                 host=settings.TEST_QUERY_DB_HOST,
+                 port=settings.TEST_QUERY_DB_PORT,
+                 user=settings.TEST_QUERY_DB_USER,
+                 password=settings.TEST_QUERY_DB_PASSWORD,
+                 dbname=settings.TEST_QUERY_DB_NAME
+             )
+             self._query_engines[ds_key] = QueryDatabase(datasource)
+             
         return self._query_engines[ds_key]
 
 _db_provider = DatabaseProvider()
@@ -302,3 +320,6 @@ def get_app_db() -> AppDatabase:
 
 def get_query_db(project_id: int = None) -> QueryDatabase:
     return get_db_provider().get_query_db(project_id)
+
+def get_test_query_db() -> QueryDatabase:
+    return get_db_provider().get_test_query_db()

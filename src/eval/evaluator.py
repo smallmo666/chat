@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 from dataclasses import dataclass
 
 from src.workflow.graph import create_graph
-from src.core.database import get_query_db
+from src.core.database import get_query_db, get_test_query_db
 from langchain_core.messages import HumanMessage
 
 @dataclass
@@ -23,8 +23,16 @@ class Evaluator:
     def __init__(self, project_id: int = None):
         self.project_id = project_id
         self.graph = create_graph()
-        # Use new get_query_db with project_id
-        self.db = get_query_db(project_id)
+        
+        if project_id:
+            # 正常模式：使用项目配置的数据库
+            self.db = get_query_db(project_id)
+        else:
+            # 评测模式（无项目 ID）：显式使用测试数据库
+            # 这确保了评测脚本连接到正确的测试数据集
+            print(f"Evaluator initialized in TEST mode. Connecting to Test Query DB...")
+            self.db = get_test_query_db()
+            print(f"Connected to Test DB: {self.db.host}:{self.db.port}/{self.db.dbname}")
 
     async def evaluate_dataset(self, dataset: List[Dict[str, Any]], parallel: int = 1) -> List[EvalResult]:
         """

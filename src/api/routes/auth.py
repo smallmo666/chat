@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import select
@@ -20,12 +20,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 class UserCreate(BaseModel):
     username: str
     password: str
-    email: str = None
+    email: Optional[str] = None
 
 class UserRead(BaseModel):
     id: int
     username: str
-    email: str = None
+    email: Optional[str] = None
     role: str
 
 class Token(BaseModel):

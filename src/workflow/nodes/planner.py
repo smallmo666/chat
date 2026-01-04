@@ -1,6 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
-from typing import List, Literal
+from pydantic import BaseModel, Field, model_validator
+from typing import List, Literal, Any
 
 from src.workflow.state import AgentState
 from src.core.llm import get_llm
@@ -15,6 +15,14 @@ class PlanStep(BaseModel):
 
 class PlannerResponse(BaseModel):
     plan: List[PlanStep] = Field(..., description="执行计划")
+
+    @model_validator(mode='before')
+    @classmethod
+    def map_steps_to_plan(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "steps" in data and "plan" not in data:
+                data["plan"] = data["steps"]
+        return data
 
 BASE_SYSTEM_PROMPT = """
 你是一个高级 Text2SQL 智能体的规划师。
@@ -47,6 +55,7 @@ BASE_SYSTEM_PROMPT = """
 - 优先使用 SQL 解决数据获取问题，使用 PythonAnalysis 解决计算和逻辑问题。
 
 请制定执行计划，包含一系列步骤（node 和 desc），并以 JSON 格式输出。
+注意：输出的 JSON 对象必须包含一个名为 "plan" 的列表字段。
 """
 
 REWRITE_SYSTEM_PROMPT = """

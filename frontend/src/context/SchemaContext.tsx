@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { TableSchema } from '../types';
+import api from '../lib/api';
 
 interface SchemaContextType {
     dbTables: TableSchema[];
@@ -12,7 +13,7 @@ interface SchemaContextType {
 
 const SchemaContext = createContext<SchemaContextType | undefined>(undefined);
 
-export const SchemaProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const SchemaProvider: React.FC<{ children: ReactNode; projectId?: string }> = ({ children, projectId }) => {
     const [dbTables, setDbTables] = useState<TableSchema[]>([]);
     const [checkedKeys, setCheckedKeys] = useState<React.Key[]>([]);
     const [loading, setLoading] = useState(false);
@@ -20,8 +21,12 @@ export const SchemaProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const fetchTables = async () => {
         setLoading(true);
         try {
-            const res = await fetch('http://localhost:8000/tables');
-            const data = await res.json();
+            let url = '/api/projects/tables';
+            if (projectId) {
+                url += `?project_id=${projectId}`;
+            }
+            const res = await api.get(url);
+            const data = res.data;
             if (data.tables) {
                 setDbTables(data.tables);
             }
@@ -33,8 +38,10 @@ export const SchemaProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
 
     useEffect(() => {
-        fetchTables();
-    }, []);
+        if (projectId) {
+            fetchTables();
+        }
+    }, [projectId]);
 
     const refreshTables = async () => {
         await fetchTables();

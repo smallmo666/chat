@@ -5,9 +5,9 @@ from sqlmodel import select
 from src.core.database import get_app_db, AppDatabase, QueryDatabase
 from src.core.models import DataSource, User
 from src.api.schemas import DataSourceCreate, DataSourceRead
-from src.api.deps import get_current_user
+from src.core.security_auth import get_current_user
 
-router = APIRouter(prefix="/api/datasources", tags=["datasource"])
+router = APIRouter(prefix="/datasources", tags=["datasource"])
 
 @router.post("", response_model=DataSourceRead)
 def create_datasource(
@@ -52,7 +52,7 @@ def update_datasource(id: int, ds: DataSourceCreate, app_db: AppDatabase = Depen
         return db_ds
 
 @router.post("/test")
-def test_datasource_connection(ds: DataSourceCreate):
+async def test_datasource_connection(ds: DataSourceCreate):
     from sqlalchemy import text
     try:
         # Temporarily create a DataSource object (not saved to DB)
@@ -67,9 +67,9 @@ def test_datasource_connection(ds: DataSourceCreate):
         )
         # Try to initialize QueryDatabase which establishes connection
         db = QueryDatabase(temp_ds)
-        # Verify connection with a simple query
-        with db.engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        # Verify connection with a simple query using async engine
+        async with db.async_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
         return {"ok": True, "message": "Connection successful"}
     except Exception as e:
         print(f"Test connection failed: {e}")

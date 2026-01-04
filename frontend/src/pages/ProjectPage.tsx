@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Button, List, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag } from 'antd';
+import { Card, Button, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag, Row, Col } from 'antd';
 import { PlusOutlined, ProjectOutlined, DatabaseOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
@@ -84,50 +84,48 @@ const ProjectPage: React.FC = () => {
             <Button type="primary" onClick={() => setIsModalOpen(true)}>立即创建</Button>
         </Empty>
       ) : (
-        <List
-            grid={{ gutter: 24, xs: 1, sm: 2, md: 3, lg: 3, xl: 4 }}
-            dataSource={projects}
-            loading={loading}
-            renderItem={(item) => (
-            <List.Item>
-                <Card 
-                    hoverable
-                    style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #f0f0f0' }}
-                    styles={{ body: { padding: 24 } }}
-                    actions={[
-                        <Button type="link" onClick={() => navigate(`/chat/${item.id}`)}>
-                            进入分析 <RightOutlined />
-                        </Button>
-                    ]}
-                >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16 }}>
-                        <div style={{ 
-                            width: 48, height: 48, 
-                            borderRadius: 8, 
-                            background: '#e6f7ff', 
-                            color: '#1890ff',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            marginRight: 16,
-                            fontSize: 24
-                        }}>
-                            <ProjectOutlined />
+        <Row gutter={[24, 24]}>
+            {projects.map((item) => (
+                <Col key={item.id} xs={24} sm={12} md={8} lg={8} xl={6}>
+                    <Card 
+                        hoverable
+                        style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #f0f0f0', height: '100%' }}
+                        styles={{ body: { padding: 24 } }}
+                        actions={[
+                            <Button type="link" onClick={() => navigate(`/chat/${item.id}`)}>
+                                进入分析 <RightOutlined />
+                            </Button>
+                        ]}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16 }}>
+                            <div style={{ 
+                                width: 48, height: 48, 
+                                borderRadius: 8, 
+                                background: '#e6f7ff', 
+                                color: '#1890ff',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                marginRight: 16,
+                                fontSize: 24,
+                                flexShrink: 0
+                            }}>
+                                <ProjectOutlined />
+                            </div>
+                            <div style={{ overflow: 'hidden' }}>
+                                <Title level={4} style={{ margin: 0, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.name}>{item.name}</Title>
+                                <Space size={4}>
+                                    <Tag icon={<DatabaseOutlined />} color="cyan" style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {dataSources.find(d => d.id === item.data_source_id)?.name || '未知数据源'}
+                                    </Tag>
+                                </Space>
+                            </div>
                         </div>
-                        <div>
-                            <Title level={4} style={{ margin: 0, marginBottom: 4 }}>{item.name}</Title>
-                            <Space size={4}>
-                                <Tag icon={<DatabaseOutlined />} color="cyan">
-                                    {dataSources.find(d => d.id === item.data_source_id)?.name || '未知数据源'}
-                                </Tag>
-                            </Space>
+                        <div style={{ color: '#8c8c8c', fontSize: 13, height: 40, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                            基于 {dataSources.find(d => d.id === item.data_source_id)?.name} 的数据分析项目。
                         </div>
-                    </div>
-                    <div style={{ color: '#8c8c8c', fontSize: 13, height: 40, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                        基于 {dataSources.find(d => d.id === item.data_source_id)?.name} 的数据分析项目。
-                    </div>
-                </Card>
-            </List.Item>
-            )}
-        />
+                    </Card>
+                </Col>
+            ))}
+        </Row>
       )}
 
       <Modal

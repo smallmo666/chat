@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, CodeOutlined, ProjectOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import api from '../lib/api';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -33,15 +34,15 @@ const AuditPage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      let url = 'http://localhost:8000/api/audit/logs';
+      let url = '/api/audit/logs';
       if (projectId) {
           url += `?project_id=${projectId}`;
       }
-      const res = await fetch(url);
-      const json = await res.json();
-      setData(json);
+      const res = await api.get(url);
+      setData(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error(error);
+      setData([]);
     } finally {
       setLoading(false);
     }
@@ -70,7 +71,7 @@ const AuditPage = () => {
         key: 'status',
         render: (status: string) => (
             <Tag color={status === 'success' ? 'green' : 'red'}>
-                {status.toUpperCase()}
+                {status?.toUpperCase() || 'UNKNOWN'}
             </Tag>
         ),
     },
@@ -119,7 +120,7 @@ const AuditPage = () => {
       <Drawer
         title="日志详情"
         placement="right"
-        width={720}
+        size="large"
         onClose={onClose}
         open={visible}
       >

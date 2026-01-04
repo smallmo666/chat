@@ -10,8 +10,8 @@ from src.workflow.graph import create_graph
 
 # Setup Phoenix Tracing
 # This will instrument all LangChain runs within this process
-tracer_provider = register()
-LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
+# tracer_provider = register()
+# LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
 
 from src.api.routes import datasource, project, audit, chat, llm, auth, feedback # Added feedback
 
@@ -23,20 +23,20 @@ app = FastAPI(title="Text2SQL Agent API")
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Include Routers
-app.include_router(datasource.router)
-app.include_router(project.router)
-app.include_router(audit.router)
-app.include_router(chat.router)
-app.include_router(llm.router)
-app.include_router(auth.router)
-app.include_router(feedback.router) # Registered feedback
+app.include_router(datasource.router, prefix="/api")
+app.include_router(project.router, prefix="/api")
+app.include_router(audit.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
+app.include_router(llm.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(feedback.router, prefix="/api") # Registered feedback
 
 @app.on_event("startup")
 async def startup_event():

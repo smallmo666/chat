@@ -9,7 +9,7 @@ const getApiBaseUrl = () => {
         return '/api';
     }
     // 开发环境默认
-    return 'http://localhost:8000';
+    return 'http://localhost:8000/api';
 };
 
 export const API_BASE_URL = getApiBaseUrl();

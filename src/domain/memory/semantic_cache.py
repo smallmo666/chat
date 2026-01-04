@@ -16,23 +16,45 @@ class SemanticCache:
     def __init__(self, project_id: int = None):
         self.project_id = project_id or "default"
         # 使用本地持久化
-        self.client = chromadb.PersistentClient(path="./chroma_db")
-        
-        # 每个 Project 一个 Collection
-        collection_name = f"sql_cache_project_{self.project_id}"
-        self.collection = self.client.get_or_create_collection(name=collection_name)
+        try:
+            self.client = chromadb.PersistentClient(path="./chroma_db")
+            # 每个 Project 一个 Collection
+            collection_name = f"sql_cache_project_{self.project_id}"
+            self.collection = self.client.get_or_create_collection(name=collection_name)
+        except Exception as e:
+            print(f"Warning: Failed to initialize ChromaDB: {e}")
+            self.client = None
+            self.collection = None
         
         # 加载 Embedding 模型 (第一次运行会下载，建议生产环境预下载或使用 API)
         # 使用轻量级模型以保证速度
-        self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
+        # 设置 HF 镜像以解决国内下载问题
+        # 默认禁用 Semantic Cache 以避免网络问题阻塞启动
+        if os.getenv("ENABLE_SEMANTIC_CACHE", "false").lower() == "true":
+            if "HF_ENDPOINT" not in os.environ:
+                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+                
+            try:
+                self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
+            except Exception as e:
+                print(f"Warning: Failed to load SentenceTransformer: {e}")
+                self.encoder = None
+        else:
+            print("Info: Semantic Cache is disabled (ENABLE_SEMANTIC_CACHE!=true).")
+            self.encoder = None
         
     def _embed(self, text: str) -> List[float]:
+        if not self.encoder:
+            return []
         return self.encoder.encode(text).tolist()
 
     def check(self, query: str, threshold: float = 0.9) -> Optional[str]:
         """
         检查缓存。如果存在相似度 > threshold 的查询，返回对应的 SQL。
         """
+        if not self.collection or not self.encoder:
+            return None
+
         query_embedding = self._embed(query)
         
         results = self.collection.query(
@@ -64,6 +86,9 @@ class SemanticCache:
         """
         添加缓存条目。
         """
+        if not self.collection or not self.encoder:
+            return
+
         # 生成 ID
         id = hashlib.md5(query.encode()).hexdigest()
         

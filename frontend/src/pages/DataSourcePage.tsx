@@ -1,6 +1,7 @@
-import { Table, Button, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, App, Popconfirm } from 'antd';
 import { useState, useEffect } from 'react';
 import { PlusOutlined, DeleteOutlined, ThunderboltOutlined, EditOutlined } from '@ant-design/icons';
+import api from '../lib/api';
 
 interface DataSource {
   id: number;
@@ -18,16 +19,13 @@ const DataSourcePage = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
+  const { message } = App.useApp();
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/datasources');
-      if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-      }
-      const json = await res.json();
-      setData(json);
+      const res = await api.get('/api/datasources');
+      setData(res.data);
     } catch (error) {
       console.error('Fetch error:', error);
       message.error('加载数据源失败: 请检查后端服务是否正常启动');
@@ -43,25 +41,21 @@ const DataSourcePage = () => {
   const handleCreateOrUpdate = async (values: any) => {
     try {
       const url = editingId 
-        ? `http://localhost:8000/api/datasources/${editingId}`
-        : 'http://localhost:8000/api/datasources';
+        ? `/api/datasources/${editingId}`
+        : '/api/datasources';
       
-      const method = editingId ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method: method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      if (res.ok) {
-        message.success(editingId ? '更新成功' : '创建成功');
-        setIsModalOpen(false);
-        setEditingId(null);
-        form.resetFields();
-        fetchData();
+      let res;
+      if (editingId) {
+        res = await api.put(url, values);
       } else {
-        message.error(editingId ? '更新失败' : '创建失败');
+        res = await api.post(url, values);
       }
+
+      message.success(editingId ? '更新成功' : '创建成功');
+      setIsModalOpen(false);
+      setEditingId(null);
+      form.resetFields();
+      fetchData();
     } catch (error) {
       message.error('操作出错');
     }
@@ -76,31 +70,21 @@ const DataSourcePage = () => {
   const handleTestConnection = async () => {
     try {
         const values = await form.validateFields(['type', 'host', 'port', 'user', 'password', 'dbname']);
-        const res = await fetch('http://localhost:8000/api/datasources/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(values),
-        });
-        const result = await res.json();
-        if (res.ok) {
-            message.success('连接成功');
-        } else {
-            message.error(`连接失败: ${result.detail || '未知错误'}`);
-        }
-    } catch (error) {
-        message.error('测试连接时出错或表单验证失败');
+        // Add dummy name for validation since backend requires it
+        const payload = { ...values, name: 'test_connection' };
+        await api.post('/api/datasources/test', payload);
+        message.success('连接成功');
+    } catch (error: any) {
+        const errorMsg = error.response?.data?.detail || '测试连接时出错或表单验证失败';
+        message.error(`连接失败: ${errorMsg}`);
     }
   };
 
   const handleDelete = async (id: number) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/datasources/${id}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        message.success('删除成功');
-        fetchData();
-      }
+      await api.delete(`/api/datasources/${id}`);
+      message.success('删除成功');
+      fetchData();
     } catch (error) {
       message.error('删除数据源时出错');
     }

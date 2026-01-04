@@ -46,8 +46,10 @@ class SchemaSearcher:
         
         # 使用 settings 中的配置，支持未来切换模型
         embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small", 
-            openai_api_key=settings.OPENAI_API_KEY
+            model=settings.EMBEDDING_MODEL, 
+            openai_api_key=settings.OPENAI_API_KEY,
+            openai_api_base=settings.OPENAI_API_BASE,
+            check_embedding_ctx_length=False
         )
         return FAISS.from_documents(documents, embeddings)
 

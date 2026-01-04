@@ -11,12 +11,27 @@ from sqlmodel import Session, select
 from src.core.database import get_app_db
 from src.core.models import User
 from src.core.config import settings
+import bcrypt
+
+# --- Monkeypatch for bcrypt >= 4.0.0 compatibility ---
+# passlib 1.7.4 tries to detect a "wrap bug" by hashing a long password,
+# but bcrypt >= 4.0.0 raises ValueError for passwords > 72 bytes.
+# We patch hashpw to truncate input, satisfying passlib's check.
+_original_hashpw = bcrypt.hashpw
+
+def _patched_hashpw(password, salt):
+    if isinstance(password, bytes) and len(password) > 72:
+        password = password[:72]
+    return _original_hashpw(password, salt)
+
+bcrypt.hashpw = _patched_hashpw
+# -----------------------------------------------------
 
 # Password Hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2 Scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 # --- Schemas ---
 class Token(BaseModel):
@@ -36,6 +51,11 @@ def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
+    if len(password.encode('utf-8')) > 72:
+        raise HTTPException(
+            status_code=400,
+            detail="Password is too long (maximum 72 bytes)"
+        )
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):

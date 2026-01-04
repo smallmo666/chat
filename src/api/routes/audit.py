@@ -7,7 +7,7 @@ from src.core.models import AuditLog
 from src.api.schemas import FeedbackRequest
 from src.domain.memory.few_shot import get_few_shot_retriever
 
-router = APIRouter(prefix="/api/audit", tags=["audit"])
+router = APIRouter(prefix="/audit", tags=["audit"])
 
 @router.get("/logs")
 def get_audit_logs(project_id: Optional[int] = None, session_id: Optional[str] = None, app_db: AppDatabase = Depends(get_app_db)):

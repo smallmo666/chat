@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button, List, Space } from 'antd';
+import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button, List, Space, message } from 'antd';
 import { Activity } from 'lucide-react';
 import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined, SearchOutlined, BulbOutlined, BgColorsOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 
 import SchemaBrowser from '../components/SchemaBrowser';
 import ChatWindow from '../components/ChatWindow';
@@ -20,6 +20,7 @@ import { ENDPOINTS } from '../config';
 
 const ChatPageContent: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const screens = useBreakpoint();
   // md: 768px. If screen is smaller than md, we consider it mobile/tablet.
   const isMobile = !screens.md; 
@@ -64,10 +65,19 @@ const ChatPageContent: React.FC = () => {
     ]);
 
     try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        message.error('请先登录');
+        navigate('/login');
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch(ENDPOINTS.CHAT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ 
             message: userMsg,
@@ -76,6 +86,13 @@ const ChatPageContent: React.FC = () => {
             project_id: projectId ? parseInt(projectId) : undefined
         }),
       });
+      
+      if (response.status === 401) {
+          message.error('会话已过期，请重新登录');
+          navigate('/login');
+          setIsLoading(false);
+          return;
+      }
 
       if (!response.body) return;
 
@@ -389,11 +406,27 @@ const ChatPageContent: React.FC = () => {
         algorithm: theme.defaultAlgorithm,
         token: {
           colorPrimary: '#1677ff',
-          borderRadius: 8,
+          borderRadius: 12,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif',
+          colorBgContainer: '#ffffff',
+          boxShadowSecondary: '0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)',
         },
+        components: {
+          Card: {
+            headerBg: 'transparent',
+            boxShadowTertiary: '0 1px 2px 0 rgba(0, 0, 0, 0.03)',
+          },
+          Layout: {
+            bodyBg: '#f0f2f5',
+          },
+          Splitter: {
+            // Ant Design 5.x Splitter tokens might be different or not fully exposed yet in types
+            // Removing specific color tokens to avoid type errors, using style overrides if needed
+          }
+        }
       }}
     >
-      <Layout style={{ height: '100%', background: 'transparent' }}>
+      <Layout style={{ height: '100%', background: '#f5f7fa' }}>
         <Content style={{ padding: isMobile ? '8px' : '16px', height: '100%' }}>
           {isMobile ? (
              // Mobile Layout: Stack + Drawer
@@ -405,7 +438,7 @@ const ChatPageContent: React.FC = () => {
                  </div>
                  
                  {/* Main Chat Area */}
-                 <div style={{ flex: 1, background: 'white', borderRadius: 12, border: '1px solid #f0f0f0', overflow: 'hidden' }}>
+                 <div style={{ flex: 1, background: 'white', borderRadius: 16, border: '1px solid rgba(0,0,0,0.06)', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
                     <ChatWindow 
                         messages={messages}
                         isLoading={isLoading}
@@ -421,6 +454,7 @@ const ChatPageContent: React.FC = () => {
                     onClose={() => setShowSchema(false)}
                     open={showSchema}
                     width="85%"
+                    styles={{ body: { padding: 0 } }}
                  >
                      <SchemaBrowser />
                  </Drawer>
@@ -431,15 +465,16 @@ const ChatPageContent: React.FC = () => {
                     onClose={() => setShowTasks(false)}
                     open={showTasks}
                     width="85%"
+                    styles={{ body: { padding: 0 } }}
                  >
                      <TaskTimeline tasks={tasks} />
                  </Drawer>
              </div>
           ) : (
              // Desktop Layout: Splitter
-             <Splitter style={{ height: '100%', background: 'white', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #f0f0f0' }}>
+             <Splitter style={{ height: '100%', background: '#ffffff', borderRadius: 16, boxShadow: '0 8px 24px rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.06)' }}>
               {/* Left Sidebar: Schema Browser */}
-              <Splitter.Panel defaultSize="20%" min="15%" style={{borderRight: '1px solid #f0f0f0'}}>
+              <Splitter.Panel defaultSize="20%" min="15%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}}>
                  <SchemaBrowser />
               </Splitter.Panel>
 
@@ -455,15 +490,15 @@ const ChatPageContent: React.FC = () => {
 
               {/* Right: Execution Plan */}
               <Splitter.Panel defaultSize="20%" min="15%">
-                  <div style={{ height: '100%', padding: 0, background: '#fafafa', borderLeft: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ padding: '16px 24px', borderBottom: '1px solid #f0f0f0', background: '#fff' }}>
-                        <Title level={5} style={{ margin: 0, display: 'flex', alignItems: 'center', fontSize: 15 }}>
-                            <Activity size={16} style={{ marginRight: 8, color: '#1677ff' }} />
+                  <div style={{ height: '100%', padding: 0, background: '#fafafa', borderLeft: '1px solid rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#fff' }}>
+                        <Title level={5} style={{ margin: 0, display: 'flex', alignItems: 'center', fontSize: 15, fontWeight: 600 }}>
+                            <Activity size={18} style={{ marginRight: 8, color: '#1677ff' }} />
                             执行计划追踪
                         </Title>
                       </div>
                       
-                      <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
                         <TaskTimeline tasks={tasks} />
                       </div>
                   </div>
@@ -477,8 +512,9 @@ const ChatPageContent: React.FC = () => {
 };
 
 const ChatPage: React.FC = () => {
+    const { projectId } = useParams<{ projectId: string }>();
     return (
-        <SchemaProvider>
+        <SchemaProvider projectId={projectId}>
             <ChatPageContent />
         </SchemaProvider>
     );

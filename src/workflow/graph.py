@@ -20,23 +20,39 @@ from src.workflow.nodes.detective import data_detective_node
 from src.workflow.nodes.insight import insight_miner_node 
 from src.workflow.nodes.artist import ui_artist_node 
 from opentelemetry import trace
+import inspect
 
 # 获取 tracer
 tracer = trace.get_tracer(__name__)
 
 # 手动包装节点以进行追踪，因为 LangGraph 目前尚未原生支持 OTel
 def trace_node(node_func, node_name):
-    def wrapper(state, config=None):
-        with tracer.start_as_current_span(f"node.{node_name}") as span:
-            span.set_attribute("node.name", node_name)
-            # 添加输入状态属性 (注意 PII 和大小)
-            if "messages" in state and len(state["messages"]) > 0:
-                span.set_attribute("input.last_message", str(state["messages"][-1].content)[:100])
-            
-            if config:
-                return node_func(state, config)
-            return node_func(state)
-    return wrapper
+    # 如果 node_func 是异步函数，返回异步 wrapper
+    if inspect.iscoroutinefunction(node_func):
+        async def async_wrapper(state, config=None):
+            with tracer.start_as_current_span(f"node.{node_name}") as span:
+                span.set_attribute("node.name", node_name)
+                # 添加输入状态属性 (注意 PII 和大小)
+                if "messages" in state and len(state["messages"]) > 0:
+                    span.set_attribute("input.last_message", str(state["messages"][-1].content)[:100])
+                
+                if config:
+                    return await node_func(state, config)
+                return await node_func(state)
+        return async_wrapper
+    else:
+        # 同步 wrapper
+        def sync_wrapper(state, config=None):
+            with tracer.start_as_current_span(f"node.{node_name}") as span:
+                span.set_attribute("node.name", node_name)
+                # 添加输入状态属性 (注意 PII 和大小)
+                if "messages" in state and len(state["messages"]) > 0:
+                    span.set_attribute("input.last_message", str(state["messages"][-1].content)[:100])
+                
+                if config:
+                    return node_func(state, config)
+                return node_func(state)
+        return sync_wrapper
 
 def create_graph():
     """
