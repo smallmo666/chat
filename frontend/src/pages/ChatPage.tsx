@@ -217,33 +217,12 @@ const ChatPageContent: React.FC = () => {
               }
               else if (eventType === 'ui_generated') {
                   const code = data.content;
-                  const uiCard = (
-                      <Card 
-                          size="small" 
-                          title={<Space><BgColorsOutlined style={{color: '#722ed1'}} /> 生成式 UI (React Code)</Space>} 
-                          style={{marginTop: 8, background: '#f9f0ff', borderColor: '#d3adf7'}}
-                      >
-                          <Typography.Paragraph type="secondary" style={{fontSize: 12}}>
-                              * 这是一个自动生成的 React 组件代码，可直接用于前端渲染。
-                          </Typography.Paragraph>
-                          <ReactMarkdown 
-                            components={{
-                                code({node, inline, className, children, ...props}: any) {
-                                    return !inline ? (
-                                        <div style={{background: '#282c34', color: '#abb2bf', padding: '12px', borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace'}}>
-                                            <pre style={{margin: 0}}><code>{children}</code></pre>
-                                        </div>
-                                    ) : (
-                                        <code className={className} {...props}>{children}</code>
-                                    )
-                                }
-                            }}
-                        >
-                            {`\`\`\`jsx\n${code}\n\`\`\``}
-                        </ReactMarkdown>
-                      </Card>
-                  );
-                  setMessages(prev => [...prev, { role: 'agent', content: uiCard, uiComponent: code }]);
+                  // Set content to a simple text, ChatWindow will handle rendering via uiComponent field
+                  setMessages(prev => [...prev, { 
+                      role: 'agent', 
+                      content: 'UI 组件已生成', 
+                      uiComponent: code 
+                  }]);
               }
               else if (eventType === 'code_generated') {
                 const codeContent = (

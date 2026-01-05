@@ -64,10 +64,13 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
         "### 用户历史记忆/偏好:\n"
         "{memory_context}\n\n"
         "### 规则:\n"
-        "1. 如果意图清晰（用户的问题可以映射到上述 Schema 中的表和字段，或者可以通过历史记忆补全），请只输出 'CLEAR'。\n"
-        "2. 如果意图不清晰（例如：用户查询'销量'但Schema中只有'amount'，或者用户未指定时间范围且Schema中包含时间字段），请输出一个简短、友好的澄清问题。\n"
-        "3. **歧义检测**：如果用户的术语对应 Schema 中的多个字段（如 'user' 可能是 'user_id' 或 'username'），请反问用户。\n"
-        "4. 澄清问题应该引导用户使用 Schema 中存在的术语。\n"
+        "1. 如果意图清晰（用户的问题可以映射到上述 Schema 中的表和字段，或者可以通过历史记忆补全），请严格返回 JSON: {{\"status\": \"CLEAR\"}}\n"
+        "2. 如果意图不清晰（例如：用户查询'销量'但Schema中只有'amount'，或者用户未指定时间范围且Schema中包含时间字段），请返回 JSON:\n"
+        "   {{\"status\": \"AMBIGUOUS\", \"question\": \"简短友好的澄清问题\", \"options\": [\"选项1\", \"选项2\", ...], \"type\": \"select\"}}\n"
+        "   - options 应该基于 Schema 中的列名或常见业务术语。\n"
+        "   - type 可以是 'select' (单选) 或 'multiple' (多选)。\n"
+        "3. **歧义检测**：如果用户的术语对应 Schema 中的多个字段（如 'user' 可能是 'user_id' 或 'username'），请提供选项让用户选择。\n"
+        "4. 必须只返回合法的 JSON 字符串，不要包含 Markdown 标记。\n"
     )
     
     prompt = ChatPromptTemplate.from_messages([
@@ -81,13 +84,37 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     result = await chain.ainvoke({"query": last_msg}, config=config)
     content = result.content.strip()
     
-    print(f"DEBUG: ClarifyIntent Result: {content}")
+    # 清理 Markdown 代码块 (以防万一)
+    if content.startswith("```json"):
+        content = content[7:]
+    elif content.startswith("```"):
+        content = content[3:]
+    if content.endswith("```"):
+        content = content[:-3]
+    content = content.strip()
+
+    print(f"DEBUG: ClarifyIntent Raw Result: {content}")
     
-    if "CLEAR" in content.upper() and len(content) < 10:
-        return {"intent_clear": True}
-    else:
-        # 如果不是 CLEAR，说明是澄清问题。
-        # 我们将问题作为 AIMessage 返回，并标记意图为不清晰。
+    import json
+    try:
+        parsed = json.loads(content)
+        if parsed.get("status") == "CLEAR":
+            return {"intent_clear": True}
+        else:
+            # 返回结构化澄清信息
+            # 我们将 options 和 type 放入 additional_kwargs 或者作为 content 的一部分
+            # 为了兼容前端，我们可以将 JSON 字符串直接作为 content，或者构造一个特殊的 AIMessage
+            
+            # 方案：返回一个带有特殊结构的 AIMessage，前端根据内容是否为 JSON 来判断
+            return {
+                "messages": [AIMessage(content=content)],
+                "intent_clear": False
+            }
+    except json.JSONDecodeError:
+        print("Clarify: Failed to parse JSON, falling back to text.")
+        # 回退逻辑：假设内容就是问题
+        if "CLEAR" in content.upper() and len(content) < 20:
+             return {"intent_clear": True}
         return {
             "messages": [AIMessage(content=content)],
             "intent_clear": False

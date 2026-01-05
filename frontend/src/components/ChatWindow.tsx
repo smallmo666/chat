@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import Editor from '@monaco-editor/react';
 import type { Message } from '../types';
+import ArtifactRenderer from './ArtifactRenderer';
 
 const { TextArea } = Input;
 
@@ -174,6 +176,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     智能对话助手
                 </div>
                 <div style={{display: 'flex', gap: 8}}>
+                     <Tooltip title="基于当前上下文生成分析报告">
+                        <Button 
+                            icon={<FileTextOutlined />} 
+                            onClick={() => onSendMessage("请基于当前的对话上下文，为我生成一份详细的数据分析报告。", "start")}
+                            size="middle"
+                            style={{ borderRadius: 8, borderColor: '#d9d9d9', color: '#666' }}
+                        >
+                            生成报告
+                        </Button>
+                    </Tooltip>
                     {onResetSession && (
                         <Tooltip title="重置会话 (解决卡顿/循环问题)">
                             <Button 
@@ -272,11 +284,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                     <Collapse 
                                         size="small"
                                         ghost
+                                        defaultActiveKey={isLoading && index === messages.length - 1 ? ['1'] : []}
                                         expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: 10, color: '#999' }} />}
                                         items={[{ 
                                             key: '1', 
-                                            label: <span style={{fontSize: 12, color: '#888', fontWeight: 500}}>思考过程</span>, 
-                                            children: <div style={{whiteSpace: 'pre-wrap', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: 12, color: '#666', background: '#f9fafb', padding: '12px', borderRadius: 8, maxHeight: 300, overflowY: 'auto', border: '1px solid #eee'}}>{item.thinking}</div>
+                                            label: <Space size={4}><span style={{fontSize: 12, color: '#888', fontWeight: 500}}>思考过程</span>{isLoading && index === messages.length - 1 && <LoadingOutlined style={{fontSize: 10, color: '#1677ff'}} />}</Space>, 
+                                            children: (
+                                                <div style={{whiteSpace: 'pre-wrap', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: 12, color: '#666', background: '#f9fafb', padding: '12px', borderRadius: 8, maxHeight: 300, overflowY: 'auto', border: '1px solid #eee'}}>
+                                                    {item.thinking}
+                                                    {isLoading && index === messages.length - 1 && <span style={{animation: 'blink 1s step-end infinite', marginLeft: 2, fontWeight: 'bold'}}>▋</span>}
+                                                </div>
+                                            )
                                         }]}
                                         style={{ marginBottom: 12, background: 'transparent' }}
                                     />
@@ -298,45 +316,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                         <Typography.Text>AI 生成了 SQL 语句，请在执行前进行审核。</Typography.Text>
                                     </Card>
                                 ) : (
-                                    item.content && (
-                                        typeof item.content === 'string' ? (
-                                            <div className="markdown-body" style={{minHeight: item.role === 'agent' ? 24 : 'auto', fontSize: 15, lineHeight: 1.6}}>
-                                                <ReactMarkdown 
-                                                    remarkPlugins={[remarkGfm]}
-                                                    components={{
-                                                        code({node, inline, className, children, ...props}: any) {
-                                                            return !inline ? (
-                                                                <div style={{background: '#f6f8fa', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: '8px 0', border: '1px solid #e1e4e8'}}>
-                                                                    <code className={className} {...props} style={{fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: '85%'}}>
-                                                                        {children}
-                                                                    </code>
-                                                                </div>
-                                                            ) : (
-                                                                <code className={className} {...props} style={{background: 'rgba(175, 184, 193, 0.2)', padding: '0.2em 0.4em', borderRadius: '6px', fontSize: '85%', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace'}}>
-                                                                    {children}
-                                                                </code>
-                                                            )
-                                                        },
-                                                        table({children, ...props}: any) {
-                                                            return <div style={{overflowX: 'auto', margin: '12px 0'}}><table {...props} style={{borderCollapse: 'collapse', width: '100%', fontSize: 14}}>{children}</table></div>
-                                                        },
-                                                        th({children, ...props}: any) {
-                                                            return <th {...props} style={{border: '1px solid #d0d7de', padding: '8px 12px', background: '#f6f8fa', fontWeight: 600, textAlign: 'left'}}>{children}</th>
-                                                        },
-                                                        td({children, ...props}: any) {
-                                                            return <td {...props} style={{border: '1px solid #d0d7de', padding: '8px 12px'}}>{children}</td>
-                                                        }
-                                                    }}
-                                                >
-                                                    {item.content}
-                                                </ReactMarkdown>
-                                            </div>
-                                        ) : (
-                                            <div style={{minHeight: item.role === 'agent' ? 24 : 'auto'}}>
-                                                {item.content}
-                                            </div>
-                                        )
-                                    )
+                                    item.content && renderContent(item.content, item.role, (opt) => onSendMessage(opt, "start"))
+                                )}
+
+                                {/* Generative UI Component */}
+                                {item.uiComponent && (
+                                    <ArtifactRenderer 
+                                        code={item.uiComponent} 
+                                        data={item.data || latestData} 
+                                    />
                                 )}
                                 
                                 {/* Loading State for empty content */}
@@ -455,6 +443,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             fontSize: 15,
                             lineHeight: 1.5
                         }}
+                        onDrop={(e) => {
+                            e.preventDefault();
+                            const text = e.dataTransfer.getData('text/plain');
+                            if (text) {
+                                // Insert text at cursor position or append
+                                const textArea = e.currentTarget;
+                                const start = textArea.selectionStart;
+                                const end = textArea.selectionEnd;
+                                const newValue = inputValue.substring(0, start) + text + inputValue.substring(end);
+                                setInputValue(newValue);
+                                
+                                // Restore focus (optional, might need setTimeout)
+                            }
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
                     />
                     <Button 
                         type="primary" 
@@ -484,6 +487,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     50% { opacity: 1; transform: scale(1.05); }
                     100% { opacity: 0.6; transform: scale(0.95); }
                 }
+                @keyframes blink {
+                    50% { opacity: 0; }
+                }
             `}</style>
             
             {/* SQL Review Modal */}
@@ -496,17 +502,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     <Button key="edit" icon={<PlayCircleOutlined />} onClick={handleEditAndRun}>运行修改后的 SQL</Button>,
                     <Button key="approve" type="primary" icon={<PlayCircleOutlined />} onClick={handleApprove}>批准并运行</Button>
                 ]}
-                width={700}
+                width={800}
             >
                 <div style={{ marginBottom: 16 }}>
                     <Typography.Text type="secondary">智能体生成了以下 SQL，您可以在执行前进行修改。</Typography.Text>
                 </div>
-                <TextArea 
-                    value={editableSql} 
-                    onChange={(e) => setEditableSql(e.target.value)} 
-                    rows={10} 
-                    style={{ fontFamily: 'monospace', background: '#f6f6f6' }}
-                />
+                <div style={{ border: '1px solid #d9d9d9', borderRadius: 8, overflow: 'hidden' }}>
+                    <Editor
+                        height="300px"
+                        defaultLanguage="sql"
+                        value={editableSql}
+                        onChange={(value) => setEditableSql(value || '')}
+                        options={{
+                            minimap: { enabled: false },
+                            scrollBeyondLastLine: false,
+                            fontSize: 14,
+                            automaticLayout: true,
+                            tabSize: 4
+                        }}
+                    />
+                </div>
             </Modal>
         </div>
     );

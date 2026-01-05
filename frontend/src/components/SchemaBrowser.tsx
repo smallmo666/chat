@@ -100,6 +100,17 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onCollapse, onExpand, isC
                 <DirectoryTree
                     checkable
                     multiple
+                    draggable // Enable draggable
+                    onDragStart={(info) => {
+                        // Store dragged node info in dataTransfer
+                        // We only want to drag table names or column names as text
+                        info.event.dataTransfer.setData('text/plain', info.node.key as string);
+                        // Also store a custom type to verify source
+                        info.event.dataTransfer.setData('application/x-smallmo-schema', JSON.stringify({
+                            key: info.node.key,
+                            title: (info.node as any).title?.props?.children?.[0]?.props?.children || info.node.key
+                        }));
+                    }}
                     treeData={treeData}
                     showIcon
                     style={{background: 'transparent', fontSize: 13}}
