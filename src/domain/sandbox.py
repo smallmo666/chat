@@ -2,7 +2,6 @@ import sys
 import io
 import pandas as pd
 import numpy as np
-import traceback
 import ast
 import base64
 import matplotlib
@@ -10,6 +9,7 @@ import matplotlib.pyplot as plt
 from collections import OrderedDict
 import threading
 import builtins
+from func_timeout import func_timeout, FunctionTimedOut
 
 # 设置非交互式后端以防止阻塞
 matplotlib.use('Agg')
@@ -137,9 +137,12 @@ class StatefulSandbox:
                 # 清除之前的绘图
                 plt.clf()
                 
-                # Exec
-                # 我们使用会话中的持久化 'locals'
-                exec(code, safe_globals, self.context["locals"])
+                # 定义内部执行函数以供 func_timeout 调用
+                def _exec_wrapper():
+                    exec(code, safe_globals, self.context["locals"])
+
+                # 使用 func_timeout 设置 5 秒超时
+                func_timeout(5, _exec_wrapper)
                 
                 # 捕获标准输出
                 stdout_str = redirected_output.getvalue()
@@ -160,9 +163,15 @@ class StatefulSandbox:
                     "result": result_val,
                     "images": images
                 }
-                
+            
+            except FunctionTimedOut:
+                return {
+                    "output": redirected_output.getvalue(),
+                    "error": "Execution timed out (limit: 5 seconds).",
+                    "result": None,
+                    "images": []
+                }
             except Exception as e:
-                # traceback.print_exc() # Debug
                 return {
                     "output": redirected_output.getvalue(),
                     "error": f"{type(e).__name__}: {str(e)}",

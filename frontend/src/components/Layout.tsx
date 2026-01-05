@@ -4,10 +4,13 @@ import {
   DatabaseOutlined, 
   AuditOutlined,
   MenuUnfoldOutlined,
-  MenuFoldOutlined
+  MenuFoldOutlined,
+  BulbOutlined,
+  BulbFilled
 } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
+import { useTheme } from '../context/ThemeContext';
 
 const { Header, Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
@@ -16,6 +19,7 @@ const AppLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const screens = useBreakpoint();
+  const { theme, toggleTheme, isDarkMode } = useTheme();
   
   // Auto collapse on mobile
   useEffect(() => {
@@ -92,12 +96,13 @@ const AppLayout = () => {
       <Layout>
         <Header style={{ 
           padding: 0, 
-          background: '#fff', 
+          background: isDarkMode ? '#1f1f1f' : '#fff', 
           display: 'flex', 
           alignItems: 'center',
-          boxShadow: '0 1px 4px rgba(0,21,41,.08)',
+          boxShadow: isDarkMode ? '0 1px 4px rgba(0,0,0,0.2)' : '0 1px 4px rgba(0,21,41,.08)',
           zIndex: 9,
-          height: 64
+          height: 64,
+          color: isDarkMode ? '#fff' : 'inherit'
         }}>
           <div 
             style={{ 
@@ -115,6 +120,23 @@ const AppLayout = () => {
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
           <div style={{ flex: 1 }} />
+          
+          <div 
+            style={{ 
+              padding: '0 24px', 
+              cursor: 'pointer',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              fontSize: 18,
+              transition: 'color 0.3s'
+            }} 
+            onClick={toggleTheme}
+            className="hover:text-blue-500"
+          >
+            {isDarkMode ? <BulbFilled style={{ color: '#faad14' }} /> : <BulbOutlined />}
+          </div>
+
           {/* Add user profile or actions here if needed */}
         </Header>
         {/* Overlay for mobile sidebar */}

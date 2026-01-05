@@ -349,6 +349,124 @@ async def event_generator(
         yield f"event: {data['type']}\n"
         yield f"data: {json.dumps(data)}\n\n"
 
+from src.domain.sandbox import StatefulSandbox
+from pydantic import BaseModel
+
+class PythonExecRequest(BaseModel):
+    code: str
+    project_id: str
+
+@router.post("/chat/python/execute")
+async def execute_python_code(
+    request: PythonExecRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Execute Python code in the context of an existing project session.
+    """
+    # Use project_id as session_id to reuse the DataFrame context
+    sandbox = StatefulSandbox(session_id=request.project_id)
+    
+    # Execute code
+    # We don't pass 'df' here because we assume it's already in the session's locals
+    # from previous 'PythonAnalysis' node execution.
+    # However, if the session expired or 'df' is missing, the user might get a NameError.
+    # Ideally, we should check if 'df' exists, or the UI should warn the user.
+    
+    result = await asyncio.to_thread(sandbox.execute, request.code)
+    
+    return result
+
+from src.core.models import AuditLog, User, Knowledge, Dashboard
+from sqlmodel import select
+
+@router.post("/knowledge")
+async def add_knowledge(
+    term: str,
+    definition: str,
+    formula: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    添加业务知识条目
+    """
+    # TODO: In future, integrate with Vector Store embedding
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        # Check organization (assuming user belongs to one)
+        # org_id = current_user.organization_id # Need to implement multi-tenancy context
+        
+        knowledge = Knowledge(
+            term=term,
+            definition=definition,
+            formula=formula,
+            tags=tags or []
+        )
+        session.add(knowledge)
+        session.commit()
+        session.refresh(knowledge)
+        return knowledge
+
+@router.get("/knowledge")
+async def list_knowledge(
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        statement = select(Knowledge).order_by(Knowledge.created_at.desc())
+        results = session.exec(statement).all()
+        return results
+
+@router.delete("/knowledge/{kid}")
+async def delete_knowledge(
+    kid: int,
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        k = session.get(Knowledge, kid)
+        if not k:
+            return {"error": "Not found"}
+        session.delete(k)
+        session.commit()
+        return {"status": "deleted"}
+
+@router.post("/dashboards")
+async def create_dashboard(
+    title: str,
+    project_id: int,
+    layout: dict = {},
+    charts: list = [],
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        dashboard = Dashboard(
+            title=title,
+            project_id=project_id,
+            user_id=current_user.id,
+            layout=layout,
+            charts=charts
+        )
+        session.add(dashboard)
+        session.commit()
+        session.refresh(dashboard)
+        return dashboard
+
+@router.get("/dashboards")
+async def list_dashboards(
+    project_id: Optional[int] = None,
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        query = select(Dashboard)
+        if project_id:
+            query = query.where(Dashboard.project_id == project_id)
+        results = session.exec(query).all()
+        return results
+
 @router.post("/chat")
 async def chat_endpoint(
     request: ChatRequest,

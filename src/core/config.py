@@ -32,3 +32,18 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+
+# Security Check on Startup
+if settings.SECRET_KEY == "CHANGE_THIS_IN_PRODUCTION_SECRET_KEY":
+    # In a real production app, we might want to raise an error or sys.exit
+    # But for development convenience, we just print a warning.
+    # Check if we are running in production mode (e.g. via an ENV var)
+    env_mode = os.getenv("ENV", "development")
+    if env_mode.lower() == "production":
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!! CRITICAL SECURITY WARNING: You are using the default SECRET_KEY in PRODUCTION !!")
+        print("!! Please set the SECRET_KEY environment variable immediately.                 !!")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # raise ValueError("Default SECRET_KEY usage is prohibited in production environment.")
+    else:
+        print("WARNING: Using default SECRET_KEY. This is unsafe for production.")

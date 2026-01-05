@@ -4,6 +4,19 @@ from sqlalchemy import text
 from src.core.database import get_query_db
 import asyncio
 import threading
+import re
+
+def validate_identifier(name: str):
+    """
+    Validates that a SQL identifier (table name, column name) contains only safe characters.
+    Prevents SQL injection via identifier names.
+    """
+    if not name:
+        return False
+    # Only allow alphanumeric, underscore, and dot (for schema.table)
+    if not re.match(r'^[a-zA-Z0-9_.]+$', name):
+        return False
+    return True
 
 class ValueSearcher:
     """
@@ -72,6 +85,11 @@ class ValueSearcher:
                         _, table_name = table_full_name.split(".", 1)
                     else:
                         table_name = table_full_name
+                        
+                    # Security Check
+                    if not validate_identifier(table_name):
+                        print(f"Skipping potentially unsafe table name: {table_name}")
+                        continue
 
                     # 获取该表的文本列
                     columns = schema[table_full_name]
@@ -80,11 +98,18 @@ class ValueSearcher:
                     text_columns = [col['name'] for col in columns if 'char' in col['type'].lower() or 'text' in col['type'].lower()]
                     
                     for col in text_columns:
+                        # Security Check
+                        if not validate_identifier(col):
+                            print(f"Skipping potentially unsafe column name: {col}")
+                            continue
+                            
                         print(f"Indexing values for {table_full_name}.{col}...")
                         # 查询去重值
                         try:
                             # 简单的 SQL 防注入处理：使用 text()
                             # 加上表名引用
+                            # SQL Injection Protection: Validated identifiers above.
+                            # Using f-string here is safer now because we validated the identifiers against a whitelist regex.
                             sql = text(f"SELECT DISTINCT {col} FROM {table_name} WHERE {col} IS NOT NULL LIMIT {limit_per_column}")
                             result = await conn.execute(sql)
                             rows = result.fetchall()

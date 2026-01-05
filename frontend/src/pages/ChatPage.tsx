@@ -273,6 +273,13 @@ const ChatPageContent: React.FC = () => {
                       return newMsgs;
                   });
               }
+              else if (eventType === 'code_generated') {
+                  const code = data.content;
+                  setMessages(prev => [...prev, { 
+                      role: 'agent', 
+                      content: '__CODE_GENERATED__' + code
+                  }]);
+              }
               else if (eventType === 'analysis') {
                   const markdownContent = (
                       <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><FileTextOutlined style={{marginRight:6}}/> 数据洞察</span>} style={{marginTop: 8, background: '#f6ffed', borderColor: '#b7eb8f'}}>

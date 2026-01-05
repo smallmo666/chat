@@ -39,6 +39,9 @@ class AgentState(TypedDict):
     insights: Optional[List[str]] # 主动洞察结果列表
     ui_component: Optional[str] # 生成的 React 组件代码
     
+    # RAG Knowledge
+    knowledge_context: Optional[str] # Retrieved business terms and definitions
+
     # Error Handling Fields
     error: Optional[str]
     retry_count: Optional[int] # SQL Execution Retry Count (Inner Loop)

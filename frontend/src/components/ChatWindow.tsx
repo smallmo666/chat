@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor from '@monaco-editor/react';
 import type { Message } from '../types';
 import ArtifactRenderer from './ArtifactRenderer';
+
+import { useTheme } from '../context/ThemeContext';
 
 const { TextArea } = Input;
 
@@ -20,6 +22,7 @@ interface ChatWindowProps {
 }
 
 const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession }) => {
+    const { isDarkMode } = useTheme();
     const [inputValue, setInputValue] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { message } = App.useApp();
@@ -28,6 +31,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     const [reviewSql, setReviewSql] = useState<string | null>(null);
     const [isReviewOpen, setIsReviewOpen] = useState(false);
     const [editableSql, setEditableSql] = useState('');
+    
+    // Python Edit State
+    const [isPythonEditOpen, setIsPythonEditOpen] = useState(false);
+    const [editablePythonCode, setEditablePythonCode] = useState('');
+    const [pythonExecResult, setPythonExecResult] = useState<any>(null);
+    const [isPythonRunning, setIsPythonRunning] = useState(false);
+
+    // Voice & Export
+    const [isRecording, setIsRecording] = useState(false);
+    const recognitionRef = useRef<any>(null);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,6 +59,95 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             setIsReviewOpen(true);
         }
     }, [messages]);
+
+    // Initialize Speech Recognition
+    useEffect(() => {
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = false;
+            recognitionRef.current.interimResults = false;
+            recognitionRef.current.lang = 'zh-CN';
+
+            recognitionRef.current.onresult = (event: any) => {
+                const transcript = event.results[0][0].transcript;
+                setInputValue(prev => prev + transcript);
+                setIsRecording(false);
+            };
+
+            recognitionRef.current.onerror = (event: any) => {
+                console.error('Speech recognition error', event.error);
+                setIsRecording(false);
+                message.error('语音识别出错: ' + event.error);
+            };
+
+            recognitionRef.current.onend = () => {
+                setIsRecording(false);
+            };
+        }
+    }, []);
+
+    const toggleRecording = () => {
+        if (!recognitionRef.current) {
+            message.warning('您的浏览器不支持语音识别');
+            return;
+        }
+
+        if (isRecording) {
+            recognitionRef.current.stop();
+        } else {
+            try {
+                recognitionRef.current.start();
+                setIsRecording(true);
+                message.info('请开始说话...');
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    };
+
+    const handleExportHistory = () => {
+        if (messages.length === 0) {
+            message.warning('没有可导出的对话');
+            return;
+        }
+
+        const timestamp = new Date().toLocaleString();
+        let markdown = `# 对话记录 - ${timestamp}\n\n`;
+
+        messages.forEach((msg, idx) => {
+            const role = msg.role === 'user' ? 'User' : 'Agent';
+            markdown += `## ${role}\n\n`;
+            
+            if (msg.role === 'agent' && msg.thinking) {
+                markdown += `> **Thinking Process:**\n> ${msg.thinking.replace(/\n/g, '\n> ')}\n\n`;
+            }
+
+            if (typeof msg.content === 'string') {
+                markdown += `${msg.content}\n\n`;
+            } else if (msg.uiComponent) {
+                markdown += `*[生成了动态 UI 组件]*\n\n\`\`\`jsx\n${msg.uiComponent}\n\`\`\`\n\n`;
+            } else {
+                 markdown += `*[复杂内容，无法完全展示]*\n\n`;
+            }
+            
+            if (msg.vizOption) {
+                markdown += `*[包含图表可视化]*\n\n`;
+            }
+            
+            markdown += `---\n\n`;
+        });
+
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `chat_history_${Date.now()}.md`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        message.success('导出成功');
+    };
 
     const handleApprove = () => {
         onSendMessage("", "approve");
@@ -137,26 +239,154 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         }
     };
 
+    // Helper to render content
+    const renderContent = (content: string | any, role: string, onOptionSelect?: (option: string) => void) => {
+        // Try to parse JSON for interactive cards
+        if (role === 'agent' && typeof content === 'string' && (content.trim().startsWith('{') || content.trim().startsWith('```json'))) {
+             try {
+                let jsonStr = content.trim();
+                if (jsonStr.startsWith('```json')) {
+                    jsonStr = jsonStr.replace(/^```json/, '').replace(/```$/, '');
+                } else if (jsonStr.startsWith('```')) {
+                    jsonStr = jsonStr.replace(/^```/, '').replace(/```$/, '');
+                }
+                
+                const data = JSON.parse(jsonStr);
+                
+                // Clarify Intent Card
+                if (data.status === 'AMBIGUOUS' && data.options && Array.isArray(data.options)) {
+                    return (
+                        <Card 
+                            size="small" 
+                            title={<Space><CheckCircleOutlined style={{color: '#1677ff'}} /> 需要确认</Space>}
+                            style={{ borderColor: '#e6f4ff', background: isDarkMode ? '#1f1f1f' : '#f0f5ff', minWidth: 300 }}
+                            styles={{ body: { padding: '12px 16px' } }}
+                        >
+                            <Typography.Paragraph strong style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{data.question}</Typography.Paragraph>
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                                {data.options.map((opt: string, idx: number) => (
+                                    <Button 
+                                        key={idx} 
+                                        block 
+                                        style={{ textAlign: 'left' }}
+                                        onClick={() => onOptionSelect && onOptionSelect(opt)}
+                                    >
+                                        {opt}
+                                    </Button>
+                                ))}
+                            </Space>
+                        </Card>
+                    );
+                }
+             } catch (e) {
+                 // Ignore JSON parse error, treat as text
+             }
+        }
+
+
+        
+        // Handle Code Generated Event (Special Card)
+        if (role === 'agent' && typeof content === 'string' && content.startsWith('__CODE_GENERATED__')) {
+             const code = content.replace('__CODE_GENERATED__', '');
+             return (
+                 <Card 
+                    size="small" 
+                    title={<Space><CodeOutlined style={{color: '#1677ff'}} /> Python 分析代码</Space>}
+                    extra={
+                        <Button 
+                            type="link" 
+                            size="small" 
+                            icon={<EditOutlined />} 
+                            onClick={() => {
+                                setEditablePythonCode(code);
+                                setPythonExecResult(null);
+                                setIsPythonEditOpen(true);
+                            }}
+                        >
+                            编辑 & 运行
+                        </Button>
+                    }
+                    style={{ 
+                        borderColor: isDarkMode ? '#303030' : '#e6f4ff', 
+                        background: isDarkMode ? '#141414' : '#f0f5ff',
+                        marginBottom: 12
+                    }}
+                    styles={{ body: { padding: 0 } }}
+                 >
+                     <div style={{ maxHeight: 200, overflow: 'auto', padding: '8px 12px' }}>
+                        <pre style={{ margin: 0, fontSize: 12, fontFamily: 'monospace', color: isDarkMode ? '#aaa' : '#666' }}>
+                            {code}
+                        </pre>
+                     </div>
+                 </Card>
+             );
+        }
+
+        if (typeof content === 'string') {
+             return (
+                <div className="markdown-body" style={{minHeight: role === 'agent' ? 24 : 'auto', fontSize: 15, lineHeight: 1.6, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+                    <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            code({node, inline, className, children, ...props}: any) {
+                                return !inline ? (
+                                    <div style={{background: isDarkMode ? '#141414' : '#f6f8fa', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: '8px 0', border: isDarkMode ? '1px solid #303030' : '1px solid #e1e4e8'}}>
+                                        <code className={className} {...props} style={{fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: '85%', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+                                            {children}
+                                        </code>
+                                    </div>
+                                ) : (
+                                    <code className={className} {...props} style={{background: isDarkMode ? 'rgba(110, 118, 129, 0.4)' : 'rgba(175, 184, 193, 0.2)', padding: '0.2em 0.4em', borderRadius: '6px', fontSize: '85%', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+                                        {children}
+                                    </code>
+                                )
+                            },
+                            table({children, ...props}: any) {
+                                return <div style={{overflowX: 'auto', margin: '12px 0'}}><table {...props} style={{borderCollapse: 'collapse', width: '100%', fontSize: 14}}>{children}</table></div>
+                            },
+                            th({children, ...props}: any) {
+                                return <th {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', background: isDarkMode ? '#1f1f1f' : '#f6f8fa', fontWeight: 600, textAlign: 'left', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</th>
+                            },
+                            td({children, ...props}: any) {
+                                return <td {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</td>
+                            },
+                            p({children, ...props}: any) {
+                                return <p {...props} style={{marginBottom: 16, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</p>
+                            },
+                            li({children, ...props}: any) {
+                                return <li {...props} style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</li>
+                            }
+                        }}
+                    >
+                        {content}
+                    </ReactMarkdown>
+                </div>
+            );
+        }
+        
+        return <div style={{minHeight: role === 'agent' ? 24 : 'auto', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{content}</div>;
+    };
+
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#fff', position: 'relative' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: isDarkMode ? '#141414' : '#fff', position: 'relative', color: isDarkMode ? '#e0e0e0' : 'inherit' }}>
             {/* Header */}
             <div style={{ 
                 padding: '16px 24px', 
-                borderBottom: '1px solid rgba(0,0,0,0.06)', 
+                borderBottom: isDarkMode ? '1px solid #303030' : '1px solid rgba(0,0,0,0.06)', 
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center',
-                background: '#fff',
+                background: isDarkMode ? '#1f1f1f' : '#fff',
                 zIndex: 10
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 600, color: '#1f1f1f', letterSpacing: '-0.02em' }}>
+                <div style={{ display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 600, color: isDarkMode ? '#e0e0e0' : '#1f1f1f', letterSpacing: '-0.02em' }}>
                     {onToggleSidebar && (
                          <Tooltip title={isLeftCollapsed ? "展开侧边栏" : "收起侧边栏"}>
                             <Button 
                                 type="text" 
                                 icon={isLeftCollapsed ? <MenuUnfoldOutlined /> : <MenuUnfoldOutlined rotate={180} />} 
                                 onClick={onToggleSidebar} 
-                                style={{marginRight: 12}}
+                                style={{marginRight: 12, color: isDarkMode ? '#e0e0e0' : 'inherit'}}
                             />
                         </Tooltip>
                     )}
@@ -185,6 +415,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                         >
                             生成报告
                         </Button>
+                    </Tooltip>
+                    <Tooltip title="导出聊天记录 (Markdown)">
+                        <Button 
+                            icon={<ExportOutlined />} 
+                            onClick={handleExportHistory}
+                            size="middle"
+                            style={{ borderRadius: 8, borderColor: '#d9d9d9', color: '#666' }}
+                        />
                     </Tooltip>
                     {onResetSession && (
                         <Tooltip title="重置会话 (解决卡顿/循环问题)">
@@ -270,10 +508,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             <div style={{ 
                                 padding: '12px 16px', 
                                 borderRadius: item.role === 'user' ? '16px 0 16px 16px' : '0 16px 16px 16px',
-                                background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : '#fff',
-                                color: item.role === 'user' ? 'white' : '#1f1f1f',
+                                background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : (isDarkMode ? '#1f1f1f' : '#fff'),
+                                color: item.role === 'user' ? 'white' : (isDarkMode ? '#e0e0e0' : '#1f1f1f'),
                                 boxShadow: item.role === 'user' ? '0 4px 12px rgba(20, 136, 204, 0.2)' : '0 2px 8px rgba(0,0,0,0.04)',
-                                border: item.role === 'agent' ? '1px solid rgba(0,0,0,0.04)' : 'none',
+                                border: item.role === 'agent' ? (isDarkMode ? '1px solid #303030' : '1px solid rgba(0,0,0,0.04)') : 'none',
                                 fontSize: '15px',
                                 lineHeight: 1.5,
                                 overflow: 'hidden',
@@ -290,7 +528,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                             key: '1', 
                                             label: <Space size={4}><span style={{fontSize: 12, color: '#888', fontWeight: 500}}>思考过程</span>{isLoading && index === messages.length - 1 && <LoadingOutlined style={{fontSize: 10, color: '#1677ff'}} />}</Space>, 
                                             children: (
-                                                <div style={{whiteSpace: 'pre-wrap', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: 12, color: '#666', background: '#f9fafb', padding: '12px', borderRadius: 8, maxHeight: 300, overflowY: 'auto', border: '1px solid #eee'}}>
+                                                <div style={{
+                                                    whiteSpace: 'pre-wrap', 
+                                                    fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', 
+                                                    fontSize: 12, 
+                                                    color: isDarkMode ? '#aaa' : '#666', 
+                                                    background: isDarkMode ? '#141414' : '#f9fafb', 
+                                                    padding: '12px', 
+                                                    borderRadius: 8, 
+                                                    maxHeight: 300, 
+                                                    overflowY: 'auto', 
+                                                    border: isDarkMode ? '1px solid #303030' : '1px solid #eee'
+                                                }}>
                                                     {item.thinking}
                                                     {isLoading && index === messages.length - 1 && <span style={{animation: 'blink 1s step-end infinite', marginLeft: 2, fontWeight: 'bold'}}>▋</span>}
                                                 </div>
@@ -397,17 +646,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                 left: 0, 
                 right: 0, 
                 padding: '20px 24px 24px', 
-                background: 'linear-gradient(to top, rgba(255,255,255,1) 70%, rgba(255,255,255,0) 100%)',
+                background: isDarkMode 
+                    ? 'linear-gradient(to top, rgba(20,20,20,1) 70%, rgba(20,20,20,0) 100%)' 
+                    : 'linear-gradient(to top, rgba(255,255,255,1) 70%, rgba(255,255,255,0) 100%)',
                 zIndex: 20
             }}>
                 <div style={{ 
                     display: 'flex', 
                     gap: 12, 
                     alignItems: 'flex-end', 
-                    background: '#fff', 
+                    background: isDarkMode ? '#1f1f1f' : '#fff', 
                     padding: '8px 8px 8px 16px', 
                     borderRadius: 16, 
-                    border: '1px solid #e6e6e6',
+                    border: isDarkMode ? '1px solid #303030' : '1px solid #e6e6e6',
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     boxShadow: '0 4px 20px rgba(0,0,0,0.08)'
                 }}
@@ -417,7 +668,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     e.currentTarget.style.transform = 'translateY(-2px)';
                 }}
                 onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e6e6e6';
+                    e.currentTarget.style.borderColor = isDarkMode ? '#303030' : '#e6e6e6';
                     e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.08)';
                     e.currentTarget.style.transform = 'translateY(0)';
                 }}
@@ -441,7 +692,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             boxShadow: 'none', 
                             background: 'transparent',
                             fontSize: 15,
-                            lineHeight: 1.5
+                            lineHeight: 1.5,
+                            color: isDarkMode ? '#e0e0e0' : 'inherit',
+                            caretColor: isDarkMode ? '#fff' : 'inherit'
                         }}
                         onDrop={(e) => {
                             e.preventDefault();
@@ -459,22 +712,39 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                         }}
                         onDragOver={(e) => e.preventDefault()}
                     />
-                    <Button 
-                        type="primary" 
-                        shape="circle"
-                        size="large"
-                        icon={isLoading ? <LoadingOutlined /> : <SendOutlined />} 
-                        onClick={handleSend}
-                        disabled={isLoading || !inputValue.trim() || isReviewOpen}
-                        style={{ 
-                            flexShrink: 0, 
-                            width: 44, 
-                            height: 44,
-                            boxShadow: '0 4px 12px rgba(22, 119, 255, 0.4)',
-                            border: 'none',
-                            background: 'linear-gradient(135deg, #1677ff 0%, #4096ff 100%)'
-                        }}
-                    />
+                    
+                    <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+                         <Tooltip title={isRecording ? "点击停止" : "点击说话"}>
+                            <Button 
+                                type={isRecording ? 'primary' : 'text'}
+                                danger={isRecording}
+                                shape="circle"
+                                size="large"
+                                icon={<AudioOutlined spin={isRecording} />} 
+                                onClick={toggleRecording}
+                                style={{ 
+                                    color: isRecording ? '#fff' : '#888',
+                                }}
+                            />
+                        </Tooltip>
+                        
+                        <Button 
+                            type="primary" 
+                            shape="circle"
+                            size="large"
+                            icon={isLoading ? <LoadingOutlined /> : <SendOutlined />} 
+                            onClick={handleSend}
+                            disabled={isLoading || !inputValue.trim() || isReviewOpen}
+                            style={{ 
+                                flexShrink: 0, 
+                                width: 44, 
+                                height: 44,
+                                boxShadow: '0 4px 12px rgba(22, 119, 255, 0.4)',
+                                border: 'none',
+                                background: 'linear-gradient(135deg, #1677ff 0%, #4096ff 100%)'
+                            }}
+                        />
+                    </div>
                 </div>
                 <div style={{ textAlign: 'center', marginTop: 10, color: '#aaa', fontSize: 12, fontWeight: 500 }}>
                     AI 可能会产生错误，请核对重要信息。
@@ -521,6 +791,96 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             tabSize: 4
                         }}
                     />
+                </div>
+            </Modal>
+            {/* Python Edit Modal */}
+            <Modal
+                title="Python 代码分析与调试"
+                open={isPythonEditOpen}
+                onCancel={() => setIsPythonEditOpen(false)}
+                footer={null}
+                width={900}
+                styles={{ body: { padding: 0 } }}
+            >
+                <div style={{ display: 'flex', height: 600 }}>
+                    {/* Left: Code Editor */}
+                    <div style={{ flex: 1, borderRight: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ padding: '8px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Typography.Text strong>Python 脚本</Typography.Text>
+                            <Button 
+                                type="primary" 
+                                size="small" 
+                                icon={isPythonRunning ? <LoadingOutlined /> : <PlayCircleOutlined />} 
+                                onClick={handleRunPython}
+                                disabled={isPythonRunning}
+                            >
+                                运行代码
+                            </Button>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <Editor
+                                height="100%"
+                                defaultLanguage="python"
+                                value={editablePythonCode}
+                                onChange={(value) => setEditablePythonCode(value || '')}
+                                theme={isDarkMode ? "vs-dark" : "light"}
+                                options={{
+                                    minimap: { enabled: false },
+                                    scrollBeyondLastLine: false,
+                                    fontSize: 14,
+                                    automaticLayout: true,
+                                    tabSize: 4
+                                }}
+                            />
+                        </div>
+                    </div>
+                    
+                    {/* Right: Execution Result */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: isDarkMode ? '#141414' : '#fafafa' }}>
+                         <div style={{ padding: '8px 16px', borderBottom: '1px solid #f0f0f0' }}>
+                            <Typography.Text strong>执行结果</Typography.Text>
+                        </div>
+                        <div style={{ flex: 1, padding: 16, overflow: 'auto' }}>
+                            {isPythonRunning ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#999' }}>
+                                    <LoadingOutlined style={{ fontSize: 32, marginBottom: 16, color: '#1677ff' }} />
+                                    <span>正在沙箱中执行...</span>
+                                </div>
+                            ) : pythonExecResult ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                    {pythonExecResult.error && (
+                                        <div style={{ padding: 12, background: '#fff1f0', border: '1px solid #ffccc7', borderRadius: 6, color: '#cf1322' }}>
+                                            <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Error:</div>
+                                            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>{pythonExecResult.error}</pre>
+                                        </div>
+                                    )}
+                                    
+                                    {pythonExecResult.output && (
+                                        <div style={{ padding: 12, background: isDarkMode ? '#1f1f1f' : '#fff', border: isDarkMode ? '1px solid #303030' : '1px solid #e8e8e8', borderRadius: 6 }}>
+                                            <div style={{ fontWeight: 'bold', marginBottom: 4, color: '#666' }}>Standard Output:</div>
+                                            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, fontFamily: 'monospace', color: isDarkMode ? '#e0e0e0' : '#333' }}>{pythonExecResult.output}</pre>
+                                        </div>
+                                    )}
+                                    
+                                    {pythonExecResult.images && pythonExecResult.images.map((img: string, idx: number) => (
+                                        <div key={idx} style={{ padding: 12, background: isDarkMode ? '#1f1f1f' : '#fff', border: isDarkMode ? '1px solid #303030' : '1px solid #e8e8e8', borderRadius: 6, textAlign: 'center' }}>
+                                            <img src={`data:image/png;base64,${img}`} alt="Plot" style={{ maxWidth: '100%', borderRadius: 4 }} />
+                                        </div>
+                                    ))}
+                                    
+                                    {!pythonExecResult.error && !pythonExecResult.output && (!pythonExecResult.images || pythonExecResult.images.length === 0) && (
+                                        <div style={{ textAlign: 'center', color: '#999', padding: 20 }}>
+                                            代码执行成功，但没有输出。
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div style={{ textAlign: 'center', color: '#999', marginTop: 100 }}>
+                                    点击“运行代码”查看结果
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </Modal>
         </div>

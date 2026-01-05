@@ -22,6 +22,7 @@ from src.workflow.nodes.correct_sql import correct_sql_node
 from src.workflow.nodes.detective import data_detective_node 
 from src.workflow.nodes.insight import insight_miner_node 
 from src.workflow.nodes.artist import ui_artist_node 
+from src.workflow.nodes.knowledge_retrieval import knowledge_retrieval_node
 from opentelemetry import trace
 import inspect
 
@@ -67,6 +68,7 @@ def create_graph():
     # 添加节点 (Nodes) - 使用 Tracing 包装
     workflow.add_node("CacheCheck", trace_node(cache_check_node, "CacheCheck"))
     workflow.add_node("DataDetective", trace_node(data_detective_node, "DataDetective")) # 新增
+    workflow.add_node("KnowledgeRetrieval", trace_node(knowledge_retrieval_node, "KnowledgeRetrieval")) # 新增 Knowledge 节点
     workflow.add_node("Planner", trace_node(planner_node, "Planner"))
     workflow.add_node("Supervisor", trace_node(supervisor_node, "Supervisor"))
     
@@ -105,8 +107,11 @@ def create_graph():
         }
     )
     
-    # DataDetective -> Planner
-    workflow.add_edge("DataDetective", "Planner")
+    # DataDetective -> KnowledgeRetrieval (Insert Knowledge Step)
+    workflow.add_edge("DataDetective", "KnowledgeRetrieval")
+
+    # KnowledgeRetrieval -> Planner
+    workflow.add_edge("KnowledgeRetrieval", "Planner")
     
     workflow.add_edge("Planner", "Supervisor")
 

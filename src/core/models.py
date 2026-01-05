@@ -15,6 +15,40 @@ class Organization(SQLModel, table=True):
     owner_id: int = Field(foreign_key="app_users.id", description="创建者 ID")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
 
+class Knowledge(SQLModel, table=True):
+    """
+    业务知识库模型。
+    存储业务术语、计算公式和定义。
+    """
+    __tablename__ = "knowledge_base"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    organization_id: Optional[int] = Field(default=None, foreign_key="organizations.id", description="所属组织 ID")
+    term: str = Field(index=True, description="术语名称")
+    definition: str = Field(description="定义或描述")
+    formula: Optional[str] = Field(None, description="计算公式 (SQL/Math)")
+    tags: Optional[List[str]] = Field(default=[], sa_type=JSON, description="标签")
+    
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Dashboard(SQLModel, table=True):
+    """
+    仪表盘模型。
+    存储用户自定义的看板布局。
+    """
+    __tablename__ = "dashboards"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id")
+    user_id: int = Field(foreign_key="app_users.id")
+    title: str = Field(description="仪表盘标题")
+    layout: dict = Field(default={}, sa_type=JSON, description="Grid 布局配置")
+    charts: List[dict] = Field(default=[], sa_type=JSON, description="图表配置列表")
+    
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 class OrganizationMember(SQLModel, table=True):
     """
     组织成员关联表。
