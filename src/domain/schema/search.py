@@ -44,6 +44,8 @@ class SchemaSearcher:
         if not documents:
             return None
         
+        print(f"DEBUG: SchemaSearcher using Embedding Model: {settings.EMBEDDING_MODEL}")
+
         # 使用 settings 中的配置，支持未来切换模型
         embeddings = OpenAIEmbeddings(
             model=settings.EMBEDDING_MODEL, 
