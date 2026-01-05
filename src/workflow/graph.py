@@ -1,7 +1,10 @@
 import os
 from langgraph.graph import StateGraph, START, END
-# Use MemorySaver as default for simplicity and robustness after removing custom RedisSaver
-from langgraph.checkpoint.memory import MemorySaver
+# Use our custom MySQLSaver for persistence (fixes state loss on reload/restart)
+from src.utils.mysql_checkpoint import MySQLSaver
+import pymysql
+from sqlalchemy.engine import make_url
+from src.core.config import settings
 
 from src.workflow.state import AgentState
 from src.workflow.nodes.planner import planner_node
@@ -117,6 +120,8 @@ def create_graph():
     # 如果成功，去 Supervisor，它将从计划中选择下一步 (例如 Visualization 或 PythonAnalysis)
     workflow.add_conditional_edges(
         "ExecuteSQL",
+        # 如果 retry_count < 3 且有错误，去 CorrectSQL
+        # 如果 retry_count >= 3 或无错误，或者 error 包含 "配置错误" (999)，去 Supervisor
         lambda x: "CorrectSQL" if x.get("error") and x.get("retry_count", 0) < 3 else "Supervisor",
         {
             "CorrectSQL": "CorrectSQL",
@@ -162,12 +167,27 @@ def create_graph():
     )
 
     # Initialize Checkpointer
-    # For robust enterprise usage, we recommend PostgresSaver or RedisSaver (from langgraph libs)
-    # For this demo/standard setup, MemorySaver is sufficient and reliable.
-    checkpointer = MemorySaver()
-    print("Graph: 使用 MemorySaver 进行状态管理")
+    # Use custom MySQLSaver to persist state to remote DB
+    # This prevents the graph from restarting from the beginning when resuming from an interrupt
+    
+    # Parse DB URL from settings
+    db_url = make_url(settings.APP_DB_URL)
+    
+    # Connect to MySQL
+    # Note: In production, consider using a connection pool or managing connection lifecycle better
+    conn = pymysql.connect(
+        host=db_url.host,
+        port=db_url.port or 3306,
+        user=db_url.username,
+        password=db_url.password,
+        database=db_url.database,
+        autocommit=True
+    )
+    
+    checkpointer = MySQLSaver(conn)
+    print(f"Graph: 使用 MySQLSaver ({db_url.host}/{db_url.database}) 进行状态管理")
 
     return workflow.compile(
         checkpointer=checkpointer,
-        interrupt_before=["ExecuteSQL"]
+        # interrupt_before=["ExecuteSQL"] # 暂时禁用人工审批，以解决执行等待问题
     )

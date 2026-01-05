@@ -39,14 +39,30 @@ const ChatPageContent: React.FC = () => {
   // State for latest data to export
   const [latestData, setLatestData] = useState<any[]>([]);
 
+  // Splitter panel size state for collapsing
+  const [leftPanelSize, setLeftPanelSize] = useState<string | number>('20%');
+
   // Use Context
   const { checkedKeys, setCheckedKeys } = useSchema();
 
   useEffect(() => {
-      // Generate Thread ID on mount
-      const tid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      // Generate Thread ID on mount or retrieve from sessionStorage to persist across reloads
+      // NOTE: For debugging loop issue, we force generate new ID if URL param changes or on hard reload
+      let tid = sessionStorage.getItem('chat_thread_id');
+      if (!tid) {
+          tid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+          sessionStorage.setItem('chat_thread_id', tid);
+      }
       setThreadId(tid);
+      
+      // Clear session storage on unmount to prevent stale state issues? No, we want persistence.
+      // But we can add a way to clear it manually if needed.
   }, []);
+
+  const resetSession = () => {
+      sessionStorage.removeItem('chat_thread_id');
+      window.location.reload();
+  };
 
   const handleSendMessage = async (userMsg: string) => {
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
@@ -305,8 +321,9 @@ const ChatPageContent: React.FC = () => {
                               <Table 
                                 dataSource={tableData} 
                                 columns={tableColumns} 
-                                size="small" 
-                                pagination={{ pageSize: 5, size: 'small' }}
+                                size="middle" 
+                                bordered
+                                pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
                                 scroll={{ x: 'max-content' }}
                                 rowKey={(record, index) => {
                                     if (record.id !== undefined && record.id !== null) return record.id;
@@ -426,8 +443,8 @@ const ChatPageContent: React.FC = () => {
         }
       }}
     >
-      <Layout style={{ height: '100%', background: '#f5f7fa' }}>
-        <Content style={{ padding: isMobile ? '8px' : '16px', height: '100%' }}>
+      <Layout style={{ height: '100vh', background: '#f5f7fa', overflow: 'hidden' }}>
+        <Content style={{ padding: isMobile ? '8px' : '0', margin: 0, height: '100%', overflow: 'hidden' }}>
           {isMobile ? (
              // Mobile Layout: Stack + Drawer
              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -472,10 +489,14 @@ const ChatPageContent: React.FC = () => {
              </div>
           ) : (
              // Desktop Layout: Splitter
-             <Splitter style={{ height: '100%', background: '#ffffff', borderRadius: 16, boxShadow: '0 8px 24px rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.06)' }}>
+             <Splitter style={{ height: '100%', background: '#ffffff', borderRadius: 0, boxShadow: 'none', border: 'none' }}>
               {/* Left Sidebar: Schema Browser */}
-              <Splitter.Panel defaultSize="20%" min="15%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}}>
-                 <SchemaBrowser />
+              <Splitter.Panel defaultSize={leftPanelSize} min="0%" max="40%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}} size={leftPanelSize} onResize={(size) => setLeftPanelSize(size)}>
+                 <SchemaBrowser 
+                    onCollapse={() => setLeftPanelSize(0)} 
+                    isCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)} 
+                    onExpand={() => setLeftPanelSize('20%')}
+                 />
               </Splitter.Panel>
 
               {/* Middle: Chat */}
@@ -485,6 +506,15 @@ const ChatPageContent: React.FC = () => {
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
                     latestData={latestData}
+                    onToggleSidebar={() => {
+                        if (leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)) {
+                            setLeftPanelSize('20%');
+                        } else {
+                            setLeftPanelSize(0);
+                        }
+                    }}
+                    isLeftCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)}
+                    onResetSession={resetSession}
                   />
               </Splitter.Panel>
 

@@ -114,6 +114,10 @@ class QueryDatabase:
             try:
                 # 动态构建连接字符串
                 if self.type == "postgresql":
+                    # 使用 psycopg2 进行同步连接，确保 client_encoding=utf8
+                    # 关键修改：默认不指定 dbname 连接到 postgres 库，以便跨库查询
+                    # 但 inspect 通常需要连接到具体库。如果 target_dbs 包含多个库，我们需要循环连接。
+                    # 这里 logic 是：外层 loop 遍历 db_name，所以这里连接到 db_name 是对的。
                     db_connection_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{db_name}?client_encoding=utf8"
                 else:
                     db_connection_str = self._sync_conn_str # MySQL 通常只有一个 DB 上下文
@@ -154,6 +158,7 @@ class QueryDatabase:
         """
         使用 AsyncEngine 异步执行 SQL 查询。
         """
+        print(f"DEBUG: QueryDatabase.run_query_async - Executing: {query}")
         try:
             modified_query = query
             
@@ -161,13 +166,17 @@ class QueryDatabase:
             # 在全异步模式下，如果不复用 engine，动态切换比较困难。
             # 这里假设已连接到正确的 DB 或使用全限定名查询。
             
+            print("DEBUG: QueryDatabase.run_query_async - Connecting...")
             async with self.async_engine.connect() as conn:
+                print("DEBUG: QueryDatabase.run_query_async - Connected. Executing...")
                 # 异步执行
                 result = await conn.execute(text(modified_query))
+                print("DEBUG: QueryDatabase.run_query_async - Executed. Fetching results...")
                 
                 # 获取所有结果
                 rows = result.mappings().all()
                 data = [dict(row) for row in rows]
+                print(f"DEBUG: QueryDatabase.run_query_async - Fetched {len(data)} rows.")
                 
                 if not data:
                     return {
@@ -184,7 +193,10 @@ class QueryDatabase:
                     "error": None
                 }
         except Exception as query_error:
+            import traceback
+            traceback.print_exc()
             error_msg = f"执行查询时出错: {query_error}"
+            print(f"DEBUG: QueryDatabase.run_query_async - Error: {error_msg}")
             return {
                 "markdown": error_msg,
                 "json": None,

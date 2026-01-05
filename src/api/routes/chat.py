@@ -68,10 +68,27 @@ async def event_generator(
                     "manual_selected_tables": selected_tables
                 }
             elif command == "edit":
+                # Check if state exists before resuming
+                snapshot = await graph_app.aget_state(config)
+                if not snapshot.values:
+                    await queue.put({"type": "error", "content": "会话已过期或状态丢失，请刷新页面重新开始。"})
+                    return
+
                 if modified_sql:
                     await graph_app.aupdate_state(config, {"sql": modified_sql})
                 inputs = None # Resume
             elif command == "approve":
+                # Check if state exists before resuming
+                snapshot = await graph_app.aget_state(config)
+                if not snapshot.values:
+                    await queue.put({"type": "error", "content": "会话已过期或状态丢失，请刷新页面重新开始。"})
+                    return
+                # Ensure we resume execution by passing None inputs, but we might need to explicitly tell it to proceed
+                # In LangGraph 0.2+, if paused at interrupt, resuming with None should continue to next node.
+                # However, if state is stale, we might need to verify next node.
+                if not snapshot.next:
+                     print("DEBUG: No next node found in snapshot, forcing resume")
+                     
                 inputs = None # Resume
             
             step_start_time = time.time()

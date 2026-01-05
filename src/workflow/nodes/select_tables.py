@@ -61,7 +61,12 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
             break
             
     if not last_human_msg:
-        return {"relevant_schema": "No user query found."}
+        # Fallback: Check if there's a rewritten query even if no human message found in current slice
+        rewritten_query = state.get("rewritten_query")
+        if rewritten_query:
+            last_human_msg = rewritten_query
+        else:
+            return {"relevant_schema": "No user query found."}
 
     # 使用已有的重写查询（如果有）
     rewritten_query = state.get("rewritten_query")

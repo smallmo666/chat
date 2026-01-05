@@ -45,7 +45,7 @@ def is_safe_sql(sql: str) -> bool:
         # 明确阻止 GRANT/REVOKE (DCL) 和不需要的事务控制
         forbidden_types = (
             exp.Insert, exp.Update, exp.Delete, 
-            exp.Drop, exp.Create, exp.Alter, exp.Truncate, 
+            exp.Drop, exp.Create, exp.Alter, exp.TruncateTable, 
             exp.Command, # 通常是未知命令的捕获
             exp.Grant, exp.Revoke, exp.Commit, exp.Rollback
         )

@@ -136,6 +136,21 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
         print(f"DEBUG: Fixed SQL: {fixed_sql}")
         print(f"DEBUG: Reasoning: {reasoning}")
         
+        # --- 强制修正 PostgreSQL 的 Schema 引用问题 (同 DSLtoSQL) ---
+        if True: # 强制启用，防止 LLM 修复时仍然生成错误的引号
+            def fix_pg_schema_ref(match):
+                full_ref = match.group(1) # e.g. "sports_events.races"
+                if "." in full_ref:
+                    parts = full_ref.replace('"', '').split('.')
+                    if len(parts) == 2:
+                        return f'"{parts[0]}"."{parts[1]}"'
+                return match.group(0)
+
+            # 替换所有 "schema.table" 格式的引用
+            fixed_sql = re.sub(r'"([^"]+\.[^"]+)"', fix_pg_schema_ref, fixed_sql)
+            print(f"DEBUG: Fixed SQL after regex patch: {fixed_sql}")
+        # ---------------------------------------------
+
         # 安全检查 (Guardrails)
         if not is_safe_sql(fixed_sql):
             print("Security Alert: Auto-corrected SQL failed safety check.")

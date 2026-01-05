@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message } from '../types';
 
 const { TextArea } = Input;
@@ -10,9 +12,12 @@ interface ChatWindowProps {
     isLoading: boolean;
     onSendMessage: (content: string, command?: string, sql?: string) => void;
     latestData: any[];
+    onToggleSidebar?: () => void;
+    isLeftCollapsed?: boolean;
+    onResetSession?: () => void;
 }
 
-const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData }) => {
+const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession }) => {
     const [inputValue, setInputValue] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { message } = App.useApp();
@@ -143,6 +148,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                 zIndex: 10
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 600, color: '#1f1f1f', letterSpacing: '-0.02em' }}>
+                    {onToggleSidebar && (
+                         <Tooltip title={isLeftCollapsed ? "展开侧边栏" : "收起侧边栏"}>
+                            <Button 
+                                type="text" 
+                                icon={isLeftCollapsed ? <MenuUnfoldOutlined /> : <MenuUnfoldOutlined rotate={180} />} 
+                                onClick={onToggleSidebar} 
+                                style={{marginRight: 12}}
+                            />
+                        </Tooltip>
+                    )}
                     <div style={{ 
                         width: 36, 
                         height: 36, 
@@ -158,16 +173,30 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     </div>
                     智能对话助手
                 </div>
-                {latestData.length > 0 && (
-                    <Button 
-                        icon={<DownloadOutlined />} 
-                        onClick={() => handleDownload(latestData)}
-                        size="middle"
-                        style={{ borderRadius: 8, borderColor: '#d9d9d9', color: '#666' }}
-                    >
-                        导出结果
-                    </Button>
-                )}
+                <div style={{display: 'flex', gap: 8}}>
+                    {onResetSession && (
+                        <Tooltip title="重置会话 (解决卡顿/循环问题)">
+                            <Button 
+                                icon={<SyncOutlined />} 
+                                onClick={onResetSession}
+                                size="middle"
+                                style={{ borderRadius: 8, borderColor: '#d9d9d9', color: '#666' }}
+                            >
+                                重置
+                            </Button>
+                        </Tooltip>
+                    )}
+                    {latestData.length > 0 && (
+                        <Button 
+                            icon={<DownloadOutlined />} 
+                            onClick={() => handleDownload(latestData)}
+                            size="middle"
+                            style={{ borderRadius: 8, borderColor: '#d9d9d9', color: '#666' }}
+                        >
+                            导出结果
+                        </Button>
+                    )}
+                </div>
             </div>
 
             {/* Chat Area */}
@@ -227,14 +256,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
 
                             {/* Bubble */}
                             <div style={{ 
-                                padding: '16px 20px', 
+                                padding: '12px 16px', 
                                 borderRadius: item.role === 'user' ? '16px 0 16px 16px' : '0 16px 16px 16px',
                                 background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : '#fff',
                                 color: item.role === 'user' ? 'white' : '#1f1f1f',
                                 boxShadow: item.role === 'user' ? '0 4px 12px rgba(20, 136, 204, 0.2)' : '0 2px 8px rgba(0,0,0,0.04)',
                                 border: item.role === 'agent' ? '1px solid rgba(0,0,0,0.04)' : 'none',
                                 fontSize: '15px',
-                                lineHeight: 1.6,
+                                lineHeight: 1.5,
                                 overflow: 'hidden',
                                 minWidth: 60
                             }}>
@@ -270,9 +299,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                     </Card>
                                 ) : (
                                     item.content && (
-                                        <div style={{whiteSpace: 'pre-wrap', minHeight: item.role === 'agent' ? 24 : 'auto'}}>
-                                            {item.content}
-                                        </div>
+                                        typeof item.content === 'string' ? (
+                                            <div className="markdown-body" style={{minHeight: item.role === 'agent' ? 24 : 'auto', fontSize: 15, lineHeight: 1.6}}>
+                                                <ReactMarkdown 
+                                                    remarkPlugins={[remarkGfm]}
+                                                    components={{
+                                                        code({node, inline, className, children, ...props}: any) {
+                                                            return !inline ? (
+                                                                <div style={{background: '#f6f8fa', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: '8px 0', border: '1px solid #e1e4e8'}}>
+                                                                    <code className={className} {...props} style={{fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: '85%'}}>
+                                                                        {children}
+                                                                    </code>
+                                                                </div>
+                                                            ) : (
+                                                                <code className={className} {...props} style={{background: 'rgba(175, 184, 193, 0.2)', padding: '0.2em 0.4em', borderRadius: '6px', fontSize: '85%', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace'}}>
+                                                                    {children}
+                                                                </code>
+                                                            )
+                                                        },
+                                                        table({children, ...props}: any) {
+                                                            return <div style={{overflowX: 'auto', margin: '12px 0'}}><table {...props} style={{borderCollapse: 'collapse', width: '100%', fontSize: 14}}>{children}</table></div>
+                                                        },
+                                                        th({children, ...props}: any) {
+                                                            return <th {...props} style={{border: '1px solid #d0d7de', padding: '8px 12px', background: '#f6f8fa', fontWeight: 600, textAlign: 'left'}}>{children}</th>
+                                                        },
+                                                        td({children, ...props}: any) {
+                                                            return <td {...props} style={{border: '1px solid #d0d7de', padding: '8px 12px'}}>{children}</td>
+                                                        }
+                                                    }}
+                                                >
+                                                    {item.content}
+                                                </ReactMarkdown>
+                                            </div>
+                                        ) : (
+                                            <div style={{minHeight: item.role === 'agent' ? 24 : 'auto'}}>
+                                                {item.content}
+                                            </div>
+                                        )
                                     )
                                 )}
                                 

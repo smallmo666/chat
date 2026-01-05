@@ -51,7 +51,8 @@ class SchemaSearcher:
             model=settings.EMBEDDING_MODEL, 
             openai_api_key=settings.OPENAI_API_KEY,
             openai_api_base=settings.OPENAI_API_BASE,
-            check_embedding_ctx_length=False
+            check_embedding_ctx_length=False,
+            chunk_size=10 # 限制 batch size 以适配 DashScope (limit 25)
         )
         return FAISS.from_documents(documents, embeddings)
 

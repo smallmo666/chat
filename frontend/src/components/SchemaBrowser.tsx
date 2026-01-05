@@ -1,12 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Input, Tree } from 'antd';
-import { TableOutlined, SearchOutlined, ColumnHeightOutlined } from '@ant-design/icons';
+import { TableOutlined, SearchOutlined, ColumnHeightOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { Button, Tooltip } from 'antd';
 import type { TreeDataNode } from '../types';
 import { useSchema } from '../context/SchemaContext';
 
 const { DirectoryTree } = Tree;
 
-const SchemaBrowser: React.FC = () => {
+interface SchemaBrowserProps {
+    onCollapse?: () => void;
+    onExpand?: () => void;
+    isCollapsed?: boolean;
+}
+
+const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onCollapse, onExpand, isCollapsed }) => {
     const { dbTables, checkedKeys, setCheckedKeys } = useSchema();
     const [tableSearch, setTableSearch] = useState('');
     const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
@@ -58,31 +65,27 @@ const SchemaBrowser: React.FC = () => {
         }
     }, [checkedKeys]);
 
+    if (isCollapsed) {
+        return (
+            <div style={{height: '100%', borderRight: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0', background: '#fff'}}>
+                <Tooltip title="展开侧边栏" placement="right">
+                    <Button type="text" icon={<MenuUnfoldOutlined />} onClick={onExpand} />
+                </Tooltip>
+            </div>
+        );
+    }
+
     return (
         <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
             <div style={{
-                padding: '16px 24px', 
+                padding: '12px', 
                 borderBottom: '1px solid #f0f0f0', 
                 background: '#fff',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 12
+                gap: 8
             }}>
-                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-                    <div style={{display: 'flex', alignItems: 'center', fontWeight: 600, fontSize: 15, color: '#1f1f1f'}}>
-                        <TableOutlined style={{marginRight: 8, color: '#1677ff'}} />
-                        数据表清单
-                        <span style={{
-                            marginLeft: 8, 
-                            fontSize: 12, 
-                            background: '#f0f0f0', 
-                            padding: '2px 8px', 
-                            borderRadius: 10, 
-                            color: '#666',
-                            fontWeight: 'normal'
-                        }}>{dbTables.length}</span>
-                    </div>
-                </div>
+                {/* Header Title Removed to save space */}
                 <Input 
                     placeholder="搜索表名或注释..." 
                     prefix={<SearchOutlined style={{color: '#bfbfbf'}} />} 
@@ -93,14 +96,14 @@ const SchemaBrowser: React.FC = () => {
                     style={{ borderRadius: 8 }}
                 />
             </div>
-            <div style={{flex: 1, overflow: 'auto', padding: '12px 0'}}>
+            <div style={{flex: 1, overflow: 'auto', padding: '8px 0'}}>
                 <DirectoryTree
                     checkable
                     multiple
                     treeData={treeData}
                     showIcon
                     style={{background: 'transparent', fontSize: 13}}
-                    height={800} // Virtual scroll
+                    // height={800} // Virtual scroll removed for better auto-sizing
                     checkedKeys={checkedKeys}
                     onCheck={(checked) => {
                         if (Array.isArray(checked)) {

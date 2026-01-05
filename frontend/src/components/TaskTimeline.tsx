@@ -33,7 +33,7 @@ const TaskTimeline: React.FC<TaskTimelineProps> = ({ tasks }) => {
 
                     return {
                         color: color,
-                        dot: dot,
+                        dot: dot, // dot is still supported in recent antd versions for icon customization
                         children: (
                             <div style={{ paddingBottom: 16 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>

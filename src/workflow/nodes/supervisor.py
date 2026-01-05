@@ -50,6 +50,9 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
                     print("DEBUG: Supervisor - GenerateDSL not found in plan, cannot retry.")
             else:
                 print("DEBUG: Supervisor - Max plan retries reached. Proceeding with error.")
+                # 即使重试次数耗尽，我们也不应该继续执行错误的计划（比如去 Visualization）
+                # 应该直接结束，并确保错误信息被保留，以便前端显示
+                return {"next": "FINISH"}
         # -------------------
         
         # 获取上一步执行的节点 (注意 current_index 指向的是 *下一步* 要执行的，所以上一步是 current_index - 1)
@@ -57,6 +60,11 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
         
         # --- 3. Insight Mining Logic (主动洞察调度) ---
         # 触发条件: ExecuteSQL 之后 -> InsightMiner
+        # 修正: 如果是从中断恢复 (inputs=None)，prev_node 可能是 None 或 ExecuteSQL (如果 Checkpoint 保存了状态变化)
+        # 但如果是 approve 后恢复，LangGraph 实际上是刚刚运行完 ExecuteSQL (如果 interrupt_before=ExecuteSQL 且 resume 成功)
+        # 或者如果是 interrupt_before，恢复时会直接执行 ExecuteSQL，然后才回到 Supervisor。
+        # 此时 prev_node 应该是 ExecuteSQL。
+        
         if prev_node == "ExecuteSQL":
             results_str = state.get("results")
             analysis_depth = state.get("analysis_depth", "simple")

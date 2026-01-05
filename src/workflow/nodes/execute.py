@@ -63,7 +63,10 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
     同时将成功的查询交互同步到长期记忆中。
     **增强**: 集成隐私过滤 (Privacy Layer)。
     """
+    print("DEBUG: Entering execute_sql_node")
     sql = state.get("sql")
+    print(f"DEBUG: execute_sql_node - SQL: {sql}")
+
     if not sql:
         return {
             "error": "状态中未找到可执行的 SQL。",
@@ -78,8 +81,20 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
             "results": "执行被阻止: 违反安全策略"
         }
 
+    # 获取 Project ID
+    project_id = config.get("configurable", {}).get("project_id")
+    
     # 执行查询
-    db = get_query_db()
+    try:
+        db = get_query_db(project_id)
+    except ValueError as e:
+        return {
+            "error": f"配置错误: {str(e)}",
+            "results": f"系统配置错误: 无法连接到查询数据库。原因: {str(e)}",
+            "retry_count": 999, # 防止 CorrectSQL 进行无效重试
+            "plan_retry_count": 999, # 防止 Supervisor 进行无效重试
+            "messages": [AIMessage(content=f"❌ 系统配置错误: 无法连接到查询数据库。\n原因: {str(e)}")]
+        }
     
     try:
         # 异步执行
