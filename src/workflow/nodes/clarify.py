@@ -23,11 +23,16 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     messages = state["messages"]
     last_msg = messages[-1].content
     
+    # 获取最近的对话历史 (最多5轮)，辅助理解上下文 (如代词 "它")
+    history_msgs = messages[-10:-1] if len(messages) > 1 else []
+    history_text = "\n".join([f"{m.type}: {m.content}" for m in history_msgs]) if history_msgs else "无历史对话"
+    
     # 定义异步检索任务
     def _get_memory():
         try:
             memory_client = get_memory()
-            mem_results = memory_client.search(user_id=user_id, query=last_msg, limit=3)
+            # 检索原始 Query 以及关键词
+            mem_results = memory_client.search(user_id=user_id, query=last_msg, limit=5)
             return [m["memory"] for m in mem_results] if mem_results else []
         except Exception as e:
             print(f"Clarify: Failed to retrieve memory: {e}")
@@ -58,25 +63,29 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     system_prompt = (
         "你是一个 Text2SQL 的意图分析专家。\n"
         "你的任务是判断用户的输入是否包含足够的信息来构建 SQL 查询。\n"
-        "你需要结合【数据库 Schema】来判断用户的术语是否明确。\n\n"
+        "你需要结合【数据库 Schema】和【对话历史】来判断用户的术语是否明确。\n\n"
         "### 数据库 Schema (仅供参考):\n"
         "{schema_context}\n\n"
-        "### 用户历史记忆/偏好:\n"
+        "### 对话历史 (Context):\n"
+        "{history_text}\n\n"
+        "### 用户历史记忆/偏好 (重要):\n"
         "{memory_context}\n\n"
         "### 规则:\n"
-        "1. 如果意图清晰（用户的问题可以映射到上述 Schema 中的表和字段，或者可以通过历史记忆补全），请严格返回 JSON: {{\"status\": \"CLEAR\"}}\n"
-        "2. 如果意图不清晰（例如：用户查询'销量'但Schema中只有'amount'，或者用户未指定时间范围且Schema中包含时间字段），请返回 JSON:\n"
+        "1. **优先使用记忆**：如果用户的意图在历史记忆中已经澄清过（例如记忆中显示 '销量' = 'sales_amount'），请直接判定为 CLEAR，不要重复提问。\n"
+        "2. **上下文理解**：如果用户使用了代词（如 '它'、'这些'），请结合对话历史解析其实际指代。如果能解析清楚，判定为 CLEAR。\n"
+        "3. 如果意图清晰（用户的问题可以映射到上述 Schema 中的表和字段），请严格返回 JSON: {{\"status\": \"CLEAR\"}}\n"
+        "4. 如果意图不清晰（例如：用户查询'销量'但Schema中只有'amount'，或者用户未指定时间范围且Schema中包含时间字段），请返回 JSON:\n"
         "   {{\"status\": \"AMBIGUOUS\", \"question\": \"简短友好的澄清问题\", \"options\": [\"选项1\", \"选项2\", ...], \"type\": \"select\"}}\n"
         "   - options 应该基于 Schema 中的列名或常见业务术语。\n"
         "   - type 可以是 'select' (单选) 或 'multiple' (多选)。\n"
-        "3. **歧义检测**：如果用户的术语对应 Schema 中的多个字段（如 'user' 可能是 'user_id' 或 'username'），请提供选项让用户选择。\n"
-        "4. 必须只返回合法的 JSON 字符串，不要包含 Markdown 标记。\n"
+        "5. **歧义检测**：如果用户的术语对应 Schema 中的多个字段（如 'user' 可能是 'user_id' 或 'username'），且没有历史记忆可参考，请提供选项让用户选择。\n"
+        "6. 必须只返回合法的 JSON 字符串，不要包含 Markdown 标记。\n"
     )
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", "{query}")
-    ]).partial(memory_context=memory_context, schema_context=schema_context)
+    ]).partial(memory_context=memory_context, schema_context=schema_context, history_text=history_text)
     
     chain = prompt | llm
     

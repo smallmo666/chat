@@ -33,8 +33,15 @@ const TaskTimeline: React.FC<TaskTimelineProps> = ({ tasks }) => {
 
                     return {
                         color: color,
-                        dot: dot, // dot is still supported in recent antd versions for icon customization
-                        children: (
+                        dot: dot, // dot is deprecated but icon is the replacement, let's try icon first or fallback
+                        // Ant Design 5.x: use `icon` instead of `dot` if possible, but `TimelineItemProps` might still use `dot` in some versions.
+                        // The warning says: `items.dot` is deprecated. Please use `items.icon` instead.
+                        icon: dot, 
+                        
+                        // The warning says: `items.children` is deprecated. Please use `items.content` instead.
+                        children: undefined,
+                        label: undefined, // If using label layout
+                        content: (
                             <div style={{ paddingBottom: 16 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                                     <Text strong style={{ 

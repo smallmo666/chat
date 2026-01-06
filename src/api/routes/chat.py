@@ -65,7 +65,25 @@ async def event_generator(
             if command == "start":
                 inputs = {
                     "messages": [HumanMessage(content=message)],
-                    "manual_selected_tables": selected_tables
+                    "manual_selected_tables": selected_tables,
+                    # Clear previous turn's context to prevent state pollution
+                    "rewritten_query": None,
+                    "plan": None,
+                    "current_step_index": 0,
+                    "intent_clear": False,
+                    "dsl": None,
+                    "sql": None,
+                    "results": None,
+                    "error": None,
+                    "relevant_schema": None,
+                    "visualization": None,
+                    "python_code": None,
+                    "analysis": None,
+                    "insights": None,
+                    "ui_component": None,
+                    "hypotheses": None,
+                    "knowledge_context": None,
+                    "next": "START" # Reset next step
                 }
             elif command == "edit":
                 # Check if state exists before resuming
@@ -162,20 +180,27 @@ async def event_generator(
                                  audit_data["status"] = "clarification_needed"
 
                     elif node_name == "SelectTables":
-                        schema = state_update.get("relevant_schema", "")
-                        display_schema = schema[:100] + "..." if len(schema) > 100 else schema
-                        event_data["details"] = "已选择相关表:\n" + display_schema
-                        
-                        import re
-                        extracted_tables = []
-                        for line in schema.split('\n'):
-                            if line.startswith("表名:"):
-                                match = re.match(r"表名:\s*(\w+)", line)
-                                if match:
-                                    extracted_tables.append(match.group(1))
-                        
-                        if extracted_tables:
-                            await queue.put({"type": "selected_tables", "content": extracted_tables})
+                        # 处理歧义情况
+                        if state_update.get("intent_clear") is False:
+                             msgs = state_update.get("messages", [])
+                             if msgs and isinstance(msgs[-1], AIMessage):
+                                 await queue.put({"type": "result", "content": msgs[-1].content})
+                                 audit_data["status"] = "clarification_needed"
+                        else:
+                            schema = state_update.get("relevant_schema", "")
+                            display_schema = schema[:100] + "..." if len(schema) > 100 else schema
+                            event_data["details"] = "已选择相关表:\n" + display_schema
+                            
+                            import re
+                            extracted_tables = []
+                            for line in schema.split('\n'):
+                                if line.startswith("表名:"):
+                                    match = re.match(r"表名:\s*(\w+)", line)
+                                    if match:
+                                        extracted_tables.append(match.group(1))
+                            
+                            if extracted_tables:
+                                await queue.put({"type": "selected_tables", "content": extracted_tables})
 
                     elif node_name == "GenerateDSL":
                         dsl = state_update.get("dsl", "")
@@ -207,10 +232,15 @@ async def event_generator(
                         # 处理 Python 代码执行节点
                         code = state_update.get("python_code", "")
                         analysis = state_update.get("analysis", "")
+                        ui_images = state_update.get("ui_images", []) # Get images from state
                         
                         if code:
                              # 增加一个新的事件类型 'code_generated'
                              await queue.put({"type": "code_generated", "content": code})
+                        
+                        # Send images if available
+                        if ui_images:
+                            await queue.put({"type": "python_images", "content": ui_images})
                         
                         if analysis:
                             event_data["details"] = "高级分析完成"
@@ -224,6 +254,10 @@ async def event_generator(
                         viz = state_update.get("visualization", {})
                         event_data["details"] = "可视化生成完成"
                         if viz:
+                            await queue.put({"type": "visualization_config", "content": viz})
+                            # Also send old visualization event for backward compatibility if needed, 
+                            # but UIArtist uses config now.
+                            # Let's keep sending 'visualization' as well if it contains options
                             await queue.put({"type": "visualization", "content": viz})
                         else:
                             msgs = state_update.get("messages", [])
@@ -327,7 +361,7 @@ async def event_generator(
                         result_summary="Error",
                         duration_ms=total_duration,
                         status="error",
-                        error_message=str(e)
+                        error_message=str(e)[:2000]
                     )
                     session.add(log_entry)
                     session.commit()

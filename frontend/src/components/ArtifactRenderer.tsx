@@ -6,9 +6,10 @@ import ReactECharts from 'echarts-for-react';
 interface ArtifactRendererProps {
     code: string;
     data: any;
+    images?: string[];
 }
 
-const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data }) => {
+const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data, images }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const [Component, setComponent] = useState<React.ReactNode | null>(null);
@@ -20,7 +21,8 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data }) => {
             // 定义 render 函数，供组件代码调用
             const render = (Comp: any) => {
                 if (typeof Comp === 'function') {
-                    setComponent(<Comp data={data} />);
+                    // Inject images into props
+                    setComponent(<Comp data={data} images={images} />);
                 } else {
                     setComponent(Comp);
                 }
@@ -33,13 +35,14 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data }) => {
                 icons,
                 ReactECharts,
                 render,
-                data // 也将 data 直接暴露给 scope，虽然通常通过 props 传递
+                data, // 也将 data 直接暴露给 scope，虽然通常通过 props 传递
+                images
             };
 
             // 构造函数体
             // 假设 code 包含组件定义和 render(Component) 调用
             const funcBody = `
-                const { React, antd, icons, ReactECharts, render, data } = scope;
+                const { React, antd, icons, ReactECharts, render, data, images } = scope;
                 try {
                     ${code}
                 } catch (e) {

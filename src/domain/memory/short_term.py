@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-import chromadb
 import threading
 
 # 加载环境变量

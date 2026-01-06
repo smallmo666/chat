@@ -1,0 +1,18 @@
+terms:
+- definition: 总消费金额 (total_amount) 大于 1000 的用户
+  keywords:
+  - 高价值
+  - VIP
+  - 重要客户
+  name: 高价值用户
+- definition: 最近 30 天内有登录记录 (last_login > now() - interval 30 day) 的用户
+  keywords:
+  - 活跃
+  - Active
+  name: 活跃用户
+- definition: 商品交易总额，计算方式为 sum(order_amount) WHERE status = 'paid'
+  keywords:
+  - GMV
+  - 成交额
+  - 流水
+  name: GMV

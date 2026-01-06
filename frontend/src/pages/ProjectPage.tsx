@@ -32,8 +32,8 @@ const ProjectPage: React.FC = () => {
     setLoading(true);
     try {
         const [projRes, dsRes] = await Promise.all([
-            api.get('/api/projects'),
-            api.get('/api/datasources')
+            api.post('/api/projects/list'),
+            api.post('/api/datasources/list')
         ]);
         setProjects(projRes.data);
         setDataSources(dsRes.data);

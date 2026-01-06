@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import api from '../lib/api';
 import { Spin } from 'antd';
-import { useNavigate, useLocation } from 'react-router-dom';
 
 interface User {
   id: number;
@@ -32,7 +31,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          const response = await api.get('/api/auth/me');
+          // Use POST for consistency with backend
+          const response = await api.post('/api/auth/me');
           setUser(response.data);
         } catch (error) {
           localStorage.removeItem('token');
@@ -47,7 +47,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (token: string) => {
     localStorage.setItem('token', token);
     try {
-      const response = await api.get('/api/auth/me');
+      // Use POST for consistency with backend
+      const response = await api.post('/api/auth/me');
       setUser(response.data);
     } catch (error) {
        console.error("Failed to fetch user profile after login");

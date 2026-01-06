@@ -11,6 +11,8 @@ export interface Message {
     analysisDepth?: 'simple' | 'deep';
     insights?: string[];
     uiComponent?: string;
+    images?: string[]; // List of base64 images from Python analysis
+    plan?: TaskItem[]; // Execution plan steps
 }
 
 export type TaskItem = {

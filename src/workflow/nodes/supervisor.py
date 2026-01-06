@@ -39,12 +39,16 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
                 
                 if gen_dsl_index != -1:
                     print(f"DEBUG: Supervisor - Rewinding to GenerateDSL (index {gen_dsl_index}) for plan retry.")
+                    # 清除可能导致死循环的状态 (如 dsl, sql)
+                    # 我们希望 GenerateDSL 重新生成，而不是使用旧的
                     return {
                         "next": "GenerateDSL",
                         "current_step_index": gen_dsl_index + 1, # Next time supervisor runs, it will be after GenerateDSL
                         "plan_retry_count": plan_retry_count + 1,
                         "retry_count": 0, # Reset Inner Loop (SQL) retry count
-                        "error": None # Clear error to allow fresh start
+                        "error": None, # Clear error to allow fresh start
+                        "dsl": None, # Force regenerate DSL
+                        "sql": None
                     }
                 else:
                     print("DEBUG: Supervisor - GenerateDSL not found in plan, cannot retry.")
@@ -58,60 +62,70 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
         # 获取上一步执行的节点 (注意 current_index 指向的是 *下一步* 要执行的，所以上一步是 current_index - 1)
         prev_node = plan[current_index - 1]["node"] if current_index > 0 else None
         
-        # --- 3. Insight Mining Logic (主动洞察调度) ---
-        # 触发条件: ExecuteSQL 之后 -> InsightMiner
-        # 修正: 如果是从中断恢复 (inputs=None)，prev_node 可能是 None 或 ExecuteSQL (如果 Checkpoint 保存了状态变化)
-        # 但如果是 approve 后恢复，LangGraph 实际上是刚刚运行完 ExecuteSQL (如果 interrupt_before=ExecuteSQL 且 resume 成功)
-        # 或者如果是 interrupt_before，恢复时会直接执行 ExecuteSQL，然后才回到 Supervisor。
-        # 此时 prev_node 应该是 ExecuteSQL。
+        # --- 3. Intelligent Analysis & Visualization Logic ---
+        # 触发条件: ExecuteSQL 之后
+        # 1. 如果 deep analysis -> PythonAnalysis
+        # 2. 如果 normal/deep 且有数据 -> VisualizationAdvisor (为 SQL 数据生成图表建议)
         
         if prev_node == "ExecuteSQL":
             results_str = state.get("results")
             analysis_depth = state.get("analysis_depth", "simple")
-            insights = state.get("insights")
+            python_analysis_result = state.get("analysis")
+            viz_config = state.get("visualization")
             
-            # 只有在 deep 模式且结果正常时才触发
-            if (analysis_depth == "deep" 
-                and results_str 
-                and "Error" not in results_str 
-                and "Empty" not in results_str
-                and not insights):
+            has_data = results_str and "Error" not in results_str and "Empty" not in results_str
+            
+            # 优先路由到 PythonAnalysis (如果需要深度分析且未执行过)
+            if (analysis_depth == "deep" and has_data and not python_analysis_result):
+                print("DEBUG: Supervisor - Routing to PythonAnalysis (Deep Analysis Mode)")
+                return {"next": "PythonAnalysis"}
                 
-                print("DEBUG: Supervisor - Routing to InsightMiner (Deep Analysis Mode)")
-                # 这里我们不需要修改 plan，而是直接返回 next="InsightMiner"
-                # 并且不增加 current_step_index
-                return {
-                    "next": "InsightMiner"
-                }
+            # 其次路由到 VisualizationAdvisor (如果尚未生成配置且有数据)
+            # 注意：即使是 deep 模式，PythonAnalysis 执行完后也会回到这里（如果它没有直接跳过）
+            # 但我们需要一种机制让 PythonAnalysis 执行完后能继续。
+            # 当前逻辑：PythonAnalysis 执行完后，next_node_in_plan 是 Visualization。
+            # 所以我们需要在 PythonAnalysis 之后也触发 VisualizationAdvisor？
+            # 不，VisualizationAdvisor 是为了给 UIArtist 提供建议。
+            # 如果 plan 中包含 Visualization，我们应该在 UIArtist 之前运行 Advisor。
+            
+            # 让我们简化：
+            # 只要 ExecuteSQL 成功，且还没有 viz_config，就去 Advisor。
+            if has_data and not viz_config:
+                 print("DEBUG: Supervisor - Routing to VisualizationAdvisor")
+                 # 注意：这里我们插入一个临时步骤，不增加 current_step_index
+                 # 这样 Advisor 执行完后，Supervisor 会再次运行，然后继续正常的 plan (或 deep logic)
+                 return {"next": "VisualizationAdvisor"}
+
         # ----------------------------------------------
         
         # --- 4. UI Artist Logic (生成式 UI 调度) ---
-        # 触发条件: InsightMiner 之后 (或者 Visualization 之后，这里简化为 InsightMiner 之后)
-        # 或者: 如果之前是通过 Supervisor 路由到 InsightMiner 的，那么从 InsightMiner 回来时，prev_node 仍然是 plan 中的节点吗？
-        # 注意: LangGraph 的 state 传递是线性的。
-        # 如果 Supervisor 返回了 {next: "InsightMiner"}，下一次 Supervisor 运行时，
-        # state 中的 messages 会包含 InsightMiner 的输出，但 `plan` 和 `current_step_index` 没有变。
-        # 此时我们需要知道 "上一步实际执行了什么"。
-        # LangGraph 不会直接告诉我们上一步是谁，我们需要通过检查 State 变化来推断，或者依赖 plan 索引。
-        
-        # Hack: 我们检查 insights 字段是否存在且刚被填充。
-        # 但更简单的方法是：
-        # 如果当前 plan 步骤是 Visualization (尚未执行)，且我们有 insights (意味着刚从 InsightMiner 回来)，
-        # 并且还没有生成 UI Component，则路由到 UIArtist。
+        # 触发条件: PythonAnalysis 之后 (Deep) 或 VisualizationAdvisor 之后 (Normal)
         
         next_node_in_plan = plan[current_index]["node"] if current_index < len(plan) else None
         
         if next_node_in_plan == "Visualization":
-            insights = state.get("insights")
-            ui_component = state.get("ui_component")
+            # 如果是 Deep 模式，确保 PythonAnalysis 已完成
             analysis_depth = state.get("analysis_depth", "simple")
+            python_analysis_result = state.get("analysis")
+            ui_component = state.get("ui_component")
             
-            # 只有在 deep 模式，且有洞察，且尚未生成 UI 时
-            if analysis_depth == "deep" and insights and not ui_component:
-                 print("DEBUG: Supervisor - Routing to UIArtist (Deep Analysis Mode)")
-                 return {
-                     "next": "UIArtist"
-                 }
+            # Deep Mode Check
+            if analysis_depth == "deep" and not python_analysis_result:
+                 # 这通常由上面的逻辑处理，但作为双重检查
+                 pass 
+            
+            # 只有在尚未生成 UI 时才路由到 UIArtist
+            # 注意：如果 plan 里本身就有 Visualization 节点，supervisor 会自然流转到它。
+            # 但我们在 graph.py 里可能把 Visualization 节点映射到了 ui_artist_node。
+            # 这里我们只是做特殊的"插队"逻辑。
+            # 如果 next_node 就是 Visualization，我们不需要做任何特殊路由，直接让它走下面的 return {"next": next_node} 即可。
+            # 除非我们需要在 Visualization 之前强制插入 UIArtist (如果它们是同一个节点，则无需操作)
+            
+            # 关键点：我们需要区分 "Visualization" (Plan Step) 和 "UIArtist" (Node Name).
+            # 假设 Plan 中的 Visualization 对应的是 ui_artist_node。
+            # 那么我们不需要在这里做任何事，除了 Deep Mode 的特殊插队 (PythonAnalysis)。
+            
+            pass 
         # ----------------------------------------------
 
         # 如果没有计划或已完成所有步骤，则结束

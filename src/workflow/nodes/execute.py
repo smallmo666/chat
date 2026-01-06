@@ -6,6 +6,8 @@ from src.core.database import get_query_db
 from src.core.sql_security import is_safe_sql
 from src.workflow.utils.memory_sync import sync_memory
 import asyncio
+from src.core.llm import get_llm
+from langchain_core.prompts import ChatPromptTemplate
 
 # 定义敏感字段列表 (可配置)
 SENSITIVE_FIELDS = {
@@ -56,6 +58,56 @@ def apply_privacy_filter(data_list: list) -> list:
         
     return filtered_data
 
+async def analyze_empty_result(sql: str, project_id: int = None) -> str:
+    """
+    分析空结果原因并生成建议。
+    """
+    try:
+        llm = get_llm(node_name="ExecuteSQL_Analyzer", project_id=project_id)
+        # Use from_messages to avoid curly brace parsing issues in the SQL variable
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一个 SQL 分析专家。"),
+            ("human", 
+             "SQL Query: {sql}\n\n"
+             "执行结果: 空 (0 行)\n\n"
+             "请分析可能导致结果为空的原因（例如：WHERE 条件过严、拼写错误、时间范围不匹配等）。\n"
+             "并给出一个“放宽条件”的建议 SQL (只给建议，不要写 SQL 代码)。\n"
+             "用简短的中文回答，不超过 2 句话。")
+        ])
+        chain = prompt | llm
+        result = await chain.ainvoke({"sql": sql})
+        return result.content.strip()
+    except Exception as e:
+        print(f"Empty result analysis failed: {e}")
+        return "建议检查查询条件是否过严。"
+
+async def summarize_results(data: list, project_id: int = None) -> str:
+    """
+    生成数据摘要。
+    """
+    try:
+        llm = get_llm(node_name="ExecuteSQL_Summarizer", project_id=project_id)
+        
+        # 数据采样 (只取前 10 行和统计信息)
+        sample = data[:10]
+        row_count = len(data)
+        
+        # Use from_messages to safely handle JSON strings in variables
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一个数据分析助手。"),
+            ("human", 
+             "数据统计: 共 {row_count} 行。\n"
+             "数据样本 (前10行): {sample}\n\n"
+             "请用一句话总结这些数据的关键信息（例如总数、趋势、最大值等）。")
+        ])
+        
+        chain = prompt | llm
+        result = await chain.ainvoke({"row_count": row_count, "sample": json.dumps(sample, ensure_ascii=False)})
+        return result.content.strip()
+    except Exception as e:
+        print(f"Result summarization failed: {e}")
+        return f"共找到 {len(data)} 条记录。"
+
 async def execute_sql_node(state: AgentState, config: dict) -> dict:
     """
     SQL 执行节点。
@@ -105,6 +157,16 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
         
         json_result_str = db_result.get("json", "[]")
         json_result = json.loads(json_result_str)
+        
+        # 健壮性检查：确保 json_result 是列表，如果是 None 则转为空列表
+        if json_result is None:
+            json_result = []
+        elif not isinstance(json_result, list):
+            # 如果是字典（可能是错误对象），也将其包装为列表或仅处理空检查
+            print(f"DEBUG: Unexpected json_result type: {type(json_result)}")
+            if isinstance(json_result, dict) and "error" in json_result:
+                raise Exception(json_result["error"])
+            json_result = [] # 默认回退为空列表
 
         # --- Privacy Filter ---
         if isinstance(json_result, list) and len(json_result) > 0:
@@ -134,9 +196,26 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
         # 同步记忆
         await sync_memory(user_id, project_id, user_query, dsl, sql, json_result_str)
         
+        # --- Result Analysis (Zero-Result or Summary) ---
+        ai_msg_content = ""
+        
+        if len(json_result) == 0:
+            # 空结果分析
+            print(f"DEBUG: SQL executed successfully but returned 0 rows. SQL: {sql}")
+            suggestion = await analyze_empty_result(sql, project_id)
+            ai_msg_content = f"查询执行成功，但未找到任何匹配的数据。\n\n💡 **可能原因分析**: {suggestion}"
+            # 显式返回空列表字符串，确保前端能解析
+            json_result_str = "[]" 
+        else:
+            # 结果摘要
+            print(f"DEBUG: SQL returned {len(json_result)} rows.")
+            summary = await summarize_results(json_result, project_id)
+            ai_msg_content = f"查询成功，找到 {len(json_result)} 条记录。\n📊 摘要: {summary}"
+        # ------------------------------------------------
+        
         return {
             "results": json_result_str,
-            "messages": [AIMessage(content=f"查询执行成功，找到 {len(json_result)} 条记录。")],
+            "messages": [AIMessage(content=ai_msg_content)],
             "error": None,
             "retry_count": 0
         }

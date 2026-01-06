@@ -1,4 +1,3 @@
-import functools
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from src.core.database import get_app_db

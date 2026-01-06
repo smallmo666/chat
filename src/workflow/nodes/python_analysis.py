@@ -61,16 +61,35 @@ async def python_analysis_node(state: AgentState, config: dict = None) -> dict:
     # 异步解析 JSON 数据为 DataFrame (CPU 密集型)
     def _parse_data_safe():
         try:
+            if not sql_results:
+                 return None, None, None, "SQL Results is None or empty string"
+            
+            # Handle case where results might be a string representation of an error
+            if sql_results.startswith("SQL 执行失败"):
+                 return None, None, None, f"Upstream SQL Error: {sql_results}"
+
             data_list = json.loads(sql_results)
-            if not isinstance(data_list, list) or not data_list:
-                return None, None, None, "数据为空或格式不正确"
+            
+            if data_list is None:
+                return None, None, None, "Data list is None"
+                
+            if not isinstance(data_list, list):
+                return None, None, None, f"Expected list, got {type(data_list)}"
+                
+            if not data_list:
+                return None, None, None, "数据为空 (Empty List)，无法进行分析"
             
             df = pd.DataFrame(data_list)
+            if df.empty:
+                 return None, None, None, "DataFrame is empty"
+                 
             df_preview = df.head(5).to_markdown(index=False)
             columns_info = list(data_list[0].keys())
             return df, df_preview, columns_info, None
+        except json.JSONDecodeError as e:
+            return None, None, None, f"JSON Decode Error: {str(e)} (Input: {str(sql_results)[:100]}...)"
         except Exception as e:
-            return None, None, None, str(e)
+            return None, None, None, f"Unexpected Error parsing data: {str(e)}"
 
     df, df_preview, columns_info, parse_error = await asyncio.to_thread(_parse_data_safe)
     
@@ -150,5 +169,6 @@ async def python_analysis_node(state: AgentState, config: dict = None) -> dict:
     return {
         "messages": [AIMessage(content=msg_content)],
         "analysis": content, # 分析结果文本
-        "python_code": python_code # 增加 code 字段供前端展示
+        "python_code": python_code, # 增加 code 字段供前端展示
+        "ui_images": images # 存储图片列表，供 UIArtist 使用
     }

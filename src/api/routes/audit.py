@@ -9,14 +9,20 @@ from src.domain.memory.few_shot import get_few_shot_retriever
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
-@router.get("/logs")
-def get_audit_logs(project_id: Optional[int] = None, session_id: Optional[str] = None, app_db: AppDatabase = Depends(get_app_db)):
+from pydantic import BaseModel
+
+class AuditLogsRequest(BaseModel):
+    project_id: Optional[int] = None
+    session_id: Optional[str] = None
+
+@router.post("/logs/list")
+def get_audit_logs(request: AuditLogsRequest, app_db: AppDatabase = Depends(get_app_db)):
     with app_db.get_session() as session:
         query = select(AuditLog)
-        if project_id:
-            query = query.where(AuditLog.project_id == project_id)
-        if session_id:
-            query = query.where(AuditLog.session_id == session_id)
+        if request.project_id:
+            query = query.where(AuditLog.project_id == request.project_id)
+        if request.session_id:
+            query = query.where(AuditLog.session_id == request.session_id)
         logs = session.exec(query.order_by(AuditLog.created_at.desc()).limit(100)).all()
         return logs
 

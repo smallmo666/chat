@@ -24,7 +24,7 @@ const DataSourcePage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/api/datasources');
+      const res = await api.post('/api/datasources/list');
       setData(res.data);
     } catch (error) {
       console.error('Fetch error:', error);

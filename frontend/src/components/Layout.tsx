@@ -63,7 +63,9 @@ const AppLayout = () => {
           boxShadow: '2px 0 8px 0 rgba(29,35,41,.05)',
           zIndex: 100,
           position: isMobile ? 'absolute' : 'relative',
-          height: '100vh'
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column'
         }}
         zeroWidthTriggerStyle={{ top: 10 }}
       >
@@ -72,7 +74,8 @@ const AppLayout = () => {
           display: 'flex', 
           alignItems: 'center', 
           justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.1)'
+          borderBottom: '1px solid rgba(255,255,255,0.1)',
+          flexShrink: 0
         }}>
           <span style={{ 
             color: 'white', 
@@ -85,60 +88,48 @@ const AppLayout = () => {
             {collapsed ? 'DA' : '数据分析智能体'}
           </span>
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          style={{ borderRight: 0, marginTop: 16 }}
-        />
+        
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[location.pathname]}
+              items={menuItems}
+              style={{ borderRight: 0, marginTop: 16 }}
+            />
+        </div>
+
+        {/* Sider Footer Actions */}
+        <div style={{ 
+            padding: '16px 0', 
+            borderTop: '1px solid rgba(255,255,255,0.1)',
+            display: 'flex',
+            flexDirection: collapsed ? 'column' : 'row',
+            alignItems: 'center',
+            justifyContent: 'space-around',
+            gap: 8,
+            color: 'rgba(255,255,255,0.65)'
+        }}>
+             <div 
+                style={{ cursor: 'pointer', padding: 8, borderRadius: 4, transition: 'all 0.3s' }}
+                className="hover:bg-white/10 hover:text-white"
+                onClick={() => setCollapsed(!collapsed)}
+                title={collapsed ? "展开菜单" : "折叠菜单"}
+             >
+                {collapsed ? <MenuUnfoldOutlined style={{ fontSize: 18 }} /> : <MenuFoldOutlined style={{ fontSize: 18 }} />}
+             </div>
+             
+             <div 
+                style={{ cursor: 'pointer', padding: 8, borderRadius: 4, transition: 'all 0.3s' }}
+                className="hover:bg-white/10 hover:text-white"
+                onClick={toggleTheme}
+                title="切换主题"
+             >
+                {isDarkMode ? <BulbFilled style={{ color: '#faad14', fontSize: 18 }} /> : <BulbOutlined style={{ fontSize: 18 }} />}
+             </div>
+        </div>
       </Sider>
       <Layout>
-        <Header style={{ 
-          padding: 0, 
-          background: isDarkMode ? '#1f1f1f' : '#fff', 
-          display: 'flex', 
-          alignItems: 'center',
-          boxShadow: isDarkMode ? '0 1px 4px rgba(0,0,0,0.2)' : '0 1px 4px rgba(0,21,41,.08)',
-          zIndex: 9,
-          height: 64,
-          color: isDarkMode ? '#fff' : 'inherit'
-        }}>
-          <div 
-            style={{ 
-              padding: '0 24px', 
-              cursor: 'pointer',
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              fontSize: 18,
-              transition: 'color 0.3s'
-            }} 
-            onClick={() => setCollapsed(!collapsed)}
-            className="hover:text-blue-500"
-          >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </div>
-          <div style={{ flex: 1 }} />
-          
-          <div 
-            style={{ 
-              padding: '0 24px', 
-              cursor: 'pointer',
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              fontSize: 18,
-              transition: 'color 0.3s'
-            }} 
-            onClick={toggleTheme}
-            className="hover:text-blue-500"
-          >
-            {isDarkMode ? <BulbFilled style={{ color: '#faad14' }} /> : <BulbOutlined />}
-          </div>
-
-          {/* Add user profile or actions here if needed */}
-        </Header>
         {/* Overlay for mobile sidebar */}
         {isMobile && !collapsed && (
             <div 
@@ -156,16 +147,25 @@ const AppLayout = () => {
         )}
         <Content
           style={{
-            margin: isFullPage ? 0 : (isMobile ? '16px 8px' : '24px 16px'),
-            padding: isFullPage ? 0 : (isMobile ? 16 : 24),
-            minHeight: 280,
-            background: isFullPage ? 'transparent' : '#fff',
-            overflow: isFullPage ? 'hidden' : 'auto',
-            borderRadius: isFullPage ? 0 : 12,
-            boxShadow: isFullPage ? 'none' : '0 1px 2px 0 rgba(0, 0, 0, 0.03)'
+            margin: 0,
+            padding: 0,
+            height: '100vh', // Full height
+            overflow: 'hidden', // Content manages its own scroll
+            background: isFullPage ? 'transparent' : '#f0f2f5',
+            position: 'relative'
           }}
         >
-          <Outlet />
+          {/* Apply padding/margin only for non-full pages inside the content container if needed, 
+              but since ChatPage handles its own layout, we keep it simple here. 
+              For other pages, we might want a wrapper, but let's stick to the requested clean layout.
+          */}
+          <div style={{ 
+              height: '100%', 
+              overflow: isFullPage ? 'hidden' : 'auto',
+              padding: isFullPage ? 0 : (isMobile ? 16 : 24)
+          }}>
+              <Outlet />
+          </div>
         </Content>
       </Layout>
     </Layout>

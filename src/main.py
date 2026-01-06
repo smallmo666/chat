@@ -15,14 +15,15 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 from rich import box
-
 from src.workflow.graph import create_graph
 from src.core.database import get_query_db, get_app_db
 from src.utils.callbacks import UIStreamingCallbackHandler
+from src.core.logging import setup_logging, console
 
-console = Console()
+# console = Console() # Removed local instantiation
 
-def create_ui_layout(plan_steps: List[Dict[str, str]], thinking_text: str = "") -> Group:
+async def main():
+    setup_logging()List[Dict[str, str]], thinking_text: str = "") -> Group:
     """Create the UI layout with Plan Table and Thinking Panel."""
     
     # Plan Table
@@ -58,6 +59,7 @@ def create_ui_layout(plan_steps: List[Dict[str, str]], thinking_text: str = "") 
     return Group(*panels)
 
 async def main():
+    setup_logging()
     console.print(Panel("[bold green]正在初始化 Text2SQL 智能体 (Swarm Edition)...[/bold green]", expand=False))
     
     # Initialization

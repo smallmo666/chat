@@ -41,7 +41,6 @@ async def cache_check_node(state: AgentState, config: dict = None) -> dict:
             "sql": cached_sql,
             "next": "ExecuteSQL", # 跳过中间步骤
             # 构建缓存命中的执行计划，确保包含分析和可视化步骤
-            # 注意: AnalysisViz 已废弃，替换为 Visualization
             "plan": [
                 {"node": "CacheCheck", "desc": "语义缓存命中", "status": "completed"},
                 {"node": "ExecuteSQL", "desc": "执行缓存 SQL", "status": "wait"},

@@ -1,5 +1,6 @@
 import json
 import threading
+import hashlib
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
@@ -10,64 +11,363 @@ class SchemaSearcher:
     """
     Schema 搜索器。
     使用 FAISS 向量数据库和 OpenAI Embeddings 来搜索相关的表结构。
+    支持自动检测 Schema 变更并刷新索引。
     """
     def __init__(self, project_id: int = None):
         self.project_id = project_id
-        # 为了演示，我们每次都重新构建索引。
-        # 在生产环境中，应该持久化向量存储并在元数据更改时更新。
-        self.vectorstore = self._build_index()
+        self.adjacency_list = {} # 表邻接图 {table_name: [neighbor_table_names]}
+        self.all_table_metadata = {} # 缓存所有表的元数据 {table_name: info_dict}
+        self.vectorstore = None
+        self.last_checksum = None # Schema 指纹
+        self.lock = threading.Lock()
+        
+        # 初始化时尝试加载索引
+        self.index_schema(force=True)
 
-    def _build_index(self):
+    def _calculate_checksum(self, schema_dict: dict) -> str:
+        """
+        计算 Schema 的校验和 (Checksum)。
+        用于检测 Schema 是否发生变化。
+        """
+        # 提取关键信息用于 hash：表名、列名、列类型
+        # 为了保证确定性，需要排序
+        canonical_str = ""
+        sorted_tables = sorted(schema_dict.keys())
+        for table in sorted_tables:
+            info = schema_dict[table]
+            canonical_str += f"Table:{table}|"
+            sorted_cols = sorted(info['columns'], key=lambda x: x['name'])
+            for col in sorted_cols:
+                canonical_str += f"{col['name']}:{col['type']}|"
+        
+        return hashlib.md5(canonical_str.encode('utf-8')).hexdigest()
+
+    def index_schema(self, force: bool = False):
         """
         从数据库 Schema 构建 FAISS 索引。
+        
+        Args:
+            force (bool): 是否强制重建索引。如果为 False，则只在 Checksum 变化时重建。
         """
-        db = get_query_db(self.project_id)
-        
-        # 获取 Schema (JSON 字符串)
-        # TODO: 从 Project 配置中获取 scope_config
-        schema_json = db.inspect_schema()
-        schema_dict = json.loads(schema_json)
-        
-        documents = []
-        for table_name, info in schema_dict.items():
-            # 为每个表创建一个文档
-            # 内容是表名、注释和列定义的混合
-            columns_str = ", ".join([f"{col['name']} ({col.get('comment', '')})" for col in info['columns']])
-            content = f"Table: {table_name}\nComment: {info.get('comment', '')}\nColumns: {columns_str}"
-            
-            doc = Document(
-                page_content=content,
-                metadata={"table_name": table_name, "full_info": json.dumps(info, ensure_ascii=False)}
-            )
-            documents.append(doc)
-            
-        if not documents:
-            return None
-        
-        print(f"DEBUG: SchemaSearcher using Embedding Model: {settings.EMBEDDING_MODEL}")
+        with self.lock:
+            try:
+                db = get_query_db(self.project_id)
+                # 获取最新 Schema
+                schema_json = db.inspect_schema()
+                schema_dict = json.loads(schema_json)
+                
+                # 检查变更
+                current_checksum = self._calculate_checksum(schema_dict)
+                if not force and current_checksum == self.last_checksum and self.vectorstore is not None:
+                    print("DEBUG: Schema unchanged, skipping index rebuild.")
+                    return
 
-        # 使用 settings 中的配置，支持未来切换模型
-        embeddings = OpenAIEmbeddings(
-            model=settings.EMBEDDING_MODEL, 
-            openai_api_key=settings.OPENAI_API_KEY,
-            openai_api_base=settings.OPENAI_API_BASE,
-            check_embedding_ctx_length=False,
-            chunk_size=10 # 限制 batch size 以适配 DashScope (limit 25)
-        )
-        return FAISS.from_documents(documents, embeddings)
+                print(f"DEBUG: Schema change detected (Checksum: {current_checksum}), rebuilding index...")
+                
+                # 更新元数据缓存
+                self.all_table_metadata = schema_dict
+                self.adjacency_list = {} # Reset graph
+                
+                documents = []
+                for table_name, info in schema_dict.items():
+                    # 初始化邻接列表
+                    if table_name not in self.adjacency_list:
+                        self.adjacency_list[table_name] = set()
+
+                    # 为每个表创建一个文档
+                    columns_str = ", ".join([f"{col['name']} ({col.get('comment', '')})" for col in info['columns']])
+                    
+                    relationships_str = ""
+                    if "foreign_keys" in info:
+                        relationships_str = "\nForeign Keys: " + ", ".join([f"{fk['constrained_columns']} -> {fk['referred_table']}.{fk['referred_columns']}" for fk in info['foreign_keys']])
+                        
+                        # 构建邻接图
+                        for fk in info['foreign_keys']:
+                            ref_table = fk['referred_table']
+                            self.adjacency_list[table_name].add(ref_table)
+                            if ref_table not in self.adjacency_list:
+                                self.adjacency_list[ref_table] = set()
+                            self.adjacency_list[ref_table].add(table_name)
+                    
+                    content = f"Table: {table_name}\nComment: {info.get('comment', '')}\nColumns: {columns_str}{relationships_str}"
+                    
+                    doc = Document(
+                        page_content=content,
+                        metadata={"table_name": table_name, "full_info": json.dumps(info, ensure_ascii=False)}
+                    )
+                    documents.append(doc)
+
+                if not documents:
+                    self.vectorstore = None
+                    return
+                
+                print(f"DEBUG: SchemaSearcher using Embedding Model: {settings.EMBEDDING_MODEL}")
+
+                embeddings = OpenAIEmbeddings(
+                    model=settings.EMBEDDING_MODEL, 
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    openai_api_base=settings.OPENAI_API_BASE,
+                    check_embedding_ctx_length=False,
+                    chunk_size=10
+                )
+                self.vectorstore = FAISS.from_documents(documents, embeddings)
+                self.last_checksum = current_checksum
+                print("DEBUG: Schema index rebuild completed.")
+                
+            except Exception as e:
+                print(f"ERROR: Failed to index schema: {e}")
+
+    def search_candidate_tables(self, query: str, limit: int = 5) -> list[dict]:
+        """
+        根据查询返回候选表列表（结构化数据）。
+        步骤：
+        1. 向量检索 + 关键词重排序获取 Top-K。
+        2. 图谱扩展：将 Top-K 的 1-hop 邻居加入候选集。
+        
+        返回: [{"table_name": "...", "comment": "...", "full_info": {...}}, ...]
+        """
+        if not self.vectorstore:
+            return []
+            
+        # 1. 初始检索 (Recall)
+        # 获取 Top-K * 2 以确保覆盖率
+        semantic_docs = self.vectorstore.similarity_search(query, k=limit * 2)
+        
+        # 关键词加权重排序 (简化版复用逻辑)
+        query_tokens = set(query.lower().split())
+        scored_results = {}
+        for i, doc in enumerate(semantic_docs):
+            score = 1.0 / (i + 1)
+            table_name = doc.metadata["table_name"]
+            scored_results[table_name] = score
+            
+            if table_name.lower() in query.lower():
+                scored_results[table_name] += 2.0
+            
+            info = json.loads(doc.metadata["full_info"])
+            for col in info['columns']:
+                if col['name'].lower() in query_tokens:
+                     scored_results[table_name] += 0.5
+
+        sorted_tables = sorted(scored_results.items(), key=lambda x: x[1], reverse=True)
+        top_table_names = [t[0] for t in sorted_tables[:limit]]
+        
+        # 收集 Top-K 的文档
+        candidate_docs_map = {doc.metadata["table_name"]: doc for doc in semantic_docs if doc.metadata["table_name"] in top_table_names}
+        
+        # 2. 图谱扩展 (Graph Expansion)
+        expanded_names = set(top_table_names)
+        for name in top_table_names:
+            neighbors = self.adjacency_list.get(name, set())
+            for neighbor in neighbors:
+                if neighbor not in expanded_names:
+                    expanded_names.add(neighbor)
+                    print(f"DEBUG: Graph Expansion added neighbor: {neighbor} (via {name})")
+        
+        # 3. 构造最终结果列表
+        # 注意：这里有个问题，semantic_docs 可能不包含邻居表（因为它们向量相似度低）。
+        # 如果我们想返回邻居表的元数据，我们需要能访问所有表的元数据。
+        # 由于我们没有全局存储所有 doc，我们只能尽可能返回已有的，或者我们需要在 init 时保存全量 metadata。
+        # 方案：在 init 时保存 self.all_table_metadata = {name: full_info}
+        
+        # 既然我们现在不能修改 init 太大，我们尝试从 docstore 恢复（如果有的话），或者只返回表名让上层去 fetch。
+        # 为了稳妥，我们在 init 里加个 self.all_table_metadata 吧。
+        # 这里先假设我们有 self.all_table_metadata (稍后在 init 添加)
+        
+        results = []
+        for name in expanded_names:
+            if hasattr(self, 'all_table_metadata') and name in self.all_table_metadata:
+                info = self.all_table_metadata[name]
+                results.append({
+                    "table_name": name,
+                    "comment": info.get("comment", ""),
+                    "full_info": info
+                })
+            elif name in candidate_docs_map:
+                # Fallback to doc metadata if available
+                doc = candidate_docs_map[name]
+                info = json.loads(doc.metadata["full_info"])
+                results.append({
+                    "table_name": name,
+                    "comment": info.get("comment", ""),
+                    "full_info": info
+                })
+            else:
+                # 最后的 Fallback: 只有名字，没有 info。上层可能需要 inspect
+                # 但如果我们修改了 init，这里就不应该发生。
+                # 暂时返回仅名字
+                results.append({
+                    "table_name": name,
+                    "comment": "Metadata missing in cache",
+                    "full_info": {"columns": []} # Empty stub
+                })
+        
+        return results
+
+    def get_pruned_schema(self, table_names: list[str], query: str, top_k_columns: int = 10) -> str:
+        """
+        根据查询生成精简的 Schema 描述 (Column-Level Pruning)。
+        只保留 Top-K 相关列 + 主键 + 外键。
+        """
+        if not self.vectorstore or not self.all_table_metadata:
+            return ""
+            
+        result_str = ""
+        query_tokens = set(query.lower().split())
+        
+        # 预先构建列嵌入索引 (Ideal: Cache this, but for now we do simple keyword/rule matching + lightweight ranking)
+        # 由于实时构建列级向量索引太慢，我们采用规则 + 关键词匹配的启发式剪枝
+        
+        for table_name in table_names:
+            if table_name not in self.all_table_metadata:
+                continue
+                
+            info = self.all_table_metadata[table_name]
+            columns = info.get('columns', [])
+            pks = info.get('primary_key', [])
+            fks = info.get('foreign_keys', [])
+            
+            # 收集必须保留的列 (PKs + FKs)
+            kept_columns = set()
+            for pk in pks:
+                kept_columns.add(pk)
+            
+            fk_cols = set()
+            for fk in fks:
+                for col in fk['constrained_columns']:
+                    kept_columns.add(col)
+                    fk_cols.add(col)
+            
+            # 对剩余列进行评分
+            scored_cols = []
+            for col in columns:
+                col_name = col['name']
+                if col_name in kept_columns:
+                    continue
+                
+                score = 0
+                # 规则 1: 精确匹配
+                if col_name.lower() in query_tokens:
+                    score += 10
+                # 规则 2: 部分匹配
+                elif col_name.lower() in query.lower():
+                    score += 5
+                # 规则 3: 注释匹配
+                elif col.get('comment') and any(token in col['comment'] for token in query_tokens):
+                    score += 3
+                
+                scored_cols.append((col, score))
+            
+            # 排序并取 Top-K
+            scored_cols.sort(key=lambda x: x[1], reverse=True)
+            top_cols = [x[0] for x in scored_cols[:top_k_columns]]
+            
+            # 合并结果
+            final_cols = []
+            # 先加 PK/FK
+            for col in columns:
+                if col['name'] in kept_columns:
+                    final_cols.append(col)
+            
+            # 再加 Top-K
+            for col in top_cols:
+                final_cols.append(col)
+                
+            # 标记是否有省略
+            omitted_count = len(columns) - len(final_cols)
+            
+            # 生成 Markdown
+            result_str += f"### Table: {table_name}\n"
+            if info.get("comment"):
+                result_str += f"Comment: {info['comment']}\n"
+            
+            result_str += "| Column | Type | Comment |\n|---|---|---|\n"
+            for col in final_cols:
+                pk_mark = " (PK)" if col['name'] in pks else ""
+                fk_mark = " (FK)" if col['name'] in fk_cols else ""
+                result_str += f"| {col['name']} | {col['type']} | {col.get('comment', '')}{pk_mark}{fk_mark} |\n"
+            
+            if omitted_count > 0:
+                result_str += f"... ({omitted_count} other columns omitted)\n"
+            result_str += "\n"
+            
+        return result_str
 
     def search_relevant_tables(self, query: str, limit: int = 5) -> str:
         """
         根据自然语言查询搜索最相关的表。
+        采用混合检索策略：向量检索 + 关键词匹配
         返回相关表的 Markdown 格式 Schema 描述。
         """
         if not self.vectorstore:
             return "No schema information available."
             
-        docs = self.vectorstore.similarity_search(query, k=limit)
+        # 1. 向量检索 (Semantic Search)
+        # 稍微放宽 limit 以便混合
+        semantic_docs = self.vectorstore.similarity_search(query, k=limit * 2)
+        
+        # 2. 关键词检索 (Keyword Search - 简单的 BM25 模拟)
+        # 如果 query 中包含表名或字段名，显著增加其权重
+        keyword_docs = []
+        # 获取所有文档（这里假设内存中有副本，或者从 vectorstore 的 docstore 获取）
+        # FAISS 默认不暴露 docstore 的全部遍历，但我们构建时有 documents 列表。
+        # 由于 _build_index 没保存 documents 到 self，我们需要简单 hack 一下或者重新遍历
+        # 为了性能，这里我们只对 semantic_docs 进行重排序，或者如果我们能访问 raw documents
+        
+        # 更好的做法：在 _build_index 时保存 self.documents
+        # 但为了不破坏现有结构太大，我们这里只做简单的重排序优化：
+        
+        # 简单 Keyword Matching: 检查 query 中的 token 是否匹配表名
+        query_tokens = set(query.lower().split())
+        
+        scored_results = {} # {table_name: score}
+        
+        # 初始分：向量检索的排名倒数
+        for i, doc in enumerate(semantic_docs):
+            score = 1.0 / (i + 1)
+            scored_results[doc.metadata["table_name"]] = score
+            
+        # 关键词加权
+        # 注意：这需要我们能访问所有表名。
+        # 我们可以从 semantic_docs 的 metadata 中获取一部分，但如果关键词匹配的表没在向量 Top-K 里怎么办？
+        # 这是一个局限。为了解决这个问题，我们需要在 init 时保存一份 table_names 列表。
+        
+        # 让我们修改一下 __init__ 来保存 table_metadata
+        
+        final_docs = semantic_docs[:limit] # 默认回退
+        
+        # 如果我们无法访问全量表，就只能对召回结果重排序
+        for doc in semantic_docs:
+            table_name = doc.metadata["table_name"]
+            # 如果表名直接出现在 query 中，给极高权重
+            if table_name.lower() in query.lower():
+                scored_results[table_name] = scored_results.get(table_name, 0) + 2.0
+                
+            # 检查列名匹配
+            info = json.loads(doc.metadata["full_info"])
+            for col in info['columns']:
+                if col['name'].lower() in query_tokens:
+                     scored_results[table_name] = scored_results.get(table_name, 0) + 0.5
+        
+        # 排序
+        sorted_tables = sorted(scored_results.items(), key=lambda x: x[1], reverse=True)
+        top_tables = [t[0] for t in sorted_tables[:limit]]
+        
+        # 过滤 docs
+        final_docs = [doc for doc in semantic_docs if doc.metadata["table_name"] in top_tables]
+        
+        # 如果 keyword matching 没找到什么，可能 final_docs 会变少，所以要补齐
+        if len(final_docs) < limit:
+            existing_names = set(d.metadata["table_name"] for d in final_docs)
+            for doc in semantic_docs:
+                if doc.metadata["table_name"] not in existing_names:
+                    final_docs.append(doc)
+                    existing_names.add(doc.metadata["table_name"])
+                    if len(final_docs) >= limit:
+                        break
         
         result_str = ""
-        for doc in docs:
+        for doc in final_docs:
             table_name = doc.metadata["table_name"]
             info = json.loads(doc.metadata["full_info"])
             

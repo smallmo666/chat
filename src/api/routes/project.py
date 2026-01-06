@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 
 from src.core.database import get_app_db, get_query_db, AppDatabase
@@ -26,7 +26,15 @@ def create_project(
         session.refresh(db_proj)
         return db_proj
 
-@router.get("", response_model=List[ProjectRead])
+from pydantic import BaseModel
+
+class ProjectTablesRequest(BaseModel):
+    project_id: Optional[int] = None
+
+class ProjectIdRequest(BaseModel):
+    id: int
+
+@router.post("/list", response_model=List[ProjectRead])
 def get_projects(
     app_db: AppDatabase = Depends(get_app_db),
     current_user: User = Depends(get_current_user),
@@ -38,12 +46,13 @@ def get_projects(
             projects = session.exec(select(Project).where(Project.owner_id == current_user.id)).all()
         return projects
 
-@router.get("/tables")
-def get_tables(project_id: Optional[int] = Query(None), app_db: AppDatabase = Depends(get_app_db)):
+@router.post("/tables")
+def get_tables(request: ProjectTablesRequest, app_db: AppDatabase = Depends(get_app_db)):
     """
     Get tables for schema browser.
     """
     try:
+        project_id = request.project_id
         if project_id:
             query_db = get_query_db(project_id)
             
@@ -84,10 +93,10 @@ def get_tables(project_id: Optional[int] = Query(None), app_db: AppDatabase = De
         traceback.print_exc()
         return {"error": str(e)}
 
-@router.get("/{id}", response_model=ProjectRead)
-def get_project(id: int, app_db: AppDatabase = Depends(get_app_db)):
+@router.post("/get", response_model=ProjectRead)
+def get_project(request: ProjectIdRequest, app_db: AppDatabase = Depends(get_app_db)):
     with app_db.get_session() as session:
-        proj = session.get(Project, id)
+        proj = session.get(Project, request.id)
         if not proj:
             raise HTTPException(status_code=404, detail="Project not found")
         return proj

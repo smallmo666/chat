@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import select
@@ -90,6 +90,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), app_db: AppDatabase 
         )
         return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get("/me", response_model=UserRead)
+@router.post("/me", response_model=UserRead)
 def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user

@@ -1,11 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined, PartitionOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor from '@monaco-editor/react';
-import type { Message } from '../types';
+import axios from 'axios';
+import type { Message, TaskItem } from '../types';
 import ArtifactRenderer from './ArtifactRenderer';
+import { API_BASE_URL } from '../config';
+import TaskTimeline from './TaskTimeline';
 
 import { useTheme } from '../context/ThemeContext';
 
@@ -19,13 +22,18 @@ interface ChatWindowProps {
     onToggleSidebar?: () => void;
     isLeftCollapsed?: boolean;
     onResetSession?: () => void;
+    projectId?: string;
 }
 
-const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession }) => {
+const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession, projectId }) => {
     const { isDarkMode } = useTheme();
     const [inputValue, setInputValue] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { message } = App.useApp();
+
+    // Plan Modal
+    const [viewingPlan, setViewingPlan] = useState<TaskItem[] | null>(null);
+    const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
 
     // HITL States
     const [reviewSql, setReviewSql] = useState<string | null>(null);
@@ -115,7 +123,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         const timestamp = new Date().toLocaleString();
         let markdown = `# 对话记录 - ${timestamp}\n\n`;
 
-        messages.forEach((msg, idx) => {
+        messages.forEach((msg) => {
             const role = msg.role === 'user' ? 'User' : 'Agent';
             markdown += `## ${role}\n\n`;
             
@@ -161,23 +169,39 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         setReviewSql(null);
     };
 
-    const handlePinChart = (msgIndex: number, content: React.ReactNode) => {
-        // This is a bit hacky as we need to extract the ECharts option from the ReactNode
-        // In a real app, we should store structured data in the message object
-        // For now, let's assume the message object has a 'vizData' field if it's a chart
+    const handleRunPython = async () => {
+        if (!projectId) {
+            message.error("未找到项目上下文");
+            return;
+        }
         
-        // Since we didn't update the Message type yet, let's just use localStorage for demo
-        // Ideally, we should parse the ReactNode or better, pass the raw option data.
+        setIsPythonRunning(true);
+        setPythonExecResult(null);
         
-        // IMPORTANT: We need to update ChatPage to store raw viz data in the message!
-        // But for this UI component, we will just show a success message as if it worked
-        // provided we had the data.
-        
-        // Let's rely on `latestData` if it's a table, or mock chart pinning.
-        // Or better: update ChatPage to attach `vizOption` to message.
-        
-        message.success("图表已收藏到看板 (Dashboard)");
+        try {
+            const token = localStorage.getItem('token');
+            const response = await axios.post(`${API_BASE_URL}/chat/python/execute`, {
+                code: editablePythonCode,
+                project_id: projectId
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            setPythonExecResult(response.data);
+            message.success("代码执行完成");
+        } catch (e: any) {
+            console.error(e);
+            setPythonExecResult({
+                error: e.response?.data?.detail || e.message || "Execution failed"
+            });
+            message.error("代码执行出错");
+        } finally {
+            setIsPythonRunning(false);
+        }
     };
+
 
     const handleSend = () => {
         if (!inputValue.trim()) return;
@@ -351,7 +375,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                 return <td {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</td>
                             },
                             p({children, ...props}: any) {
-                                return <p {...props} style={{marginBottom: 16, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</p>
+                                return <div {...props} style={{marginBottom: 16, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</div>
                             },
                             li({children, ...props}: any) {
                                 return <li {...props} style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</li>
@@ -572,7 +596,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                 {item.uiComponent && (
                                     <ArtifactRenderer 
                                         code={item.uiComponent} 
-                                        data={item.data || latestData} 
+                                        data={item.data || latestData}
+                                        images={item.images} // Pass images to renderer
                                     />
                                 )}
                                 
@@ -588,6 +613,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                 {item.role === 'agent' && item.content && (
                                     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                                         <Space size="small">
+                                            {item.plan && (
+                                                <Tooltip title="查看执行计划">
+                                                    <Button 
+                                                        type="text" 
+                                                        size="small" 
+                                                        icon={<PartitionOutlined />} 
+                                                        style={{ color: '#aaa', fontSize: 14 }}
+                                                        onClick={() => {
+                                                            setViewingPlan(item.plan || null);
+                                                            setIsPlanModalOpen(true);
+                                                        }}
+                                                    >
+                                                        计划
+                                                    </Button>
+                                                </Tooltip>
+                                            )}
                                             <Tooltip title="有帮助">
                                                 <Button 
                                                     type="text" 
@@ -881,6 +922,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             )}
                         </div>
                     </div>
+                </div>
+            </Modal>
+
+            {/* Plan Details Modal */}
+            <Modal
+                title="执行计划详情"
+                open={isPlanModalOpen}
+                onCancel={() => setIsPlanModalOpen(false)}
+                footer={null}
+                width={600}
+            >
+                <div style={{ maxHeight: '60vh', overflowY: 'auto', padding: '12px 0' }}>
+                    {viewingPlan ? (
+                        <TaskTimeline tasks={viewingPlan} />
+                    ) : (
+                        <div style={{ textAlign: 'center', color: '#999', padding: 20 }}>无执行计划数据</div>
+                    )}
                 </div>
             </Modal>
         </div>

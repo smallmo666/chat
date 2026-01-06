@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Input, Tree } from 'antd';
-import { TableOutlined, SearchOutlined, ColumnHeightOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { Input, Tree, Spin } from 'antd';
+import { TableOutlined, SearchOutlined, ColumnHeightOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
 import type { TreeDataNode } from '../types';
 import { useSchema } from '../context/SchemaContext';
@@ -13,8 +13,8 @@ interface SchemaBrowserProps {
     isCollapsed?: boolean;
 }
 
-const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onCollapse, onExpand, isCollapsed }) => {
-    const { dbTables, checkedKeys, setCheckedKeys } = useSchema();
+const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) => {
+    const { dbTables, checkedKeys, setCheckedKeys, loading } = useSchema();
     const [tableSearch, setTableSearch] = useState('');
     const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
     const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
@@ -96,44 +96,58 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onCollapse, onExpand, isC
                     style={{ borderRadius: 8 }}
                 />
             </div>
-            <div style={{flex: 1, overflow: 'auto', padding: '8px 0'}}>
-                <DirectoryTree
-                    checkable
-                    multiple
-                    draggable // Enable draggable
-                    onDragStart={(info) => {
-                        // Store dragged node info in dataTransfer
-                        // We only want to drag table names or column names as text
-                        info.event.dataTransfer.setData('text/plain', info.node.key as string);
-                        // Also store a custom type to verify source
-                        info.event.dataTransfer.setData('application/x-smallmo-schema', JSON.stringify({
-                            key: info.node.key,
-                            title: (info.node as any).title?.props?.children?.[0]?.props?.children || info.node.key
-                        }));
-                    }}
-                    treeData={treeData}
-                    showIcon
-                    style={{background: 'transparent', fontSize: 13}}
-                    // height={800} // Virtual scroll removed for better auto-sizing
-                    checkedKeys={checkedKeys}
-                    onCheck={(checked) => {
-                        if (Array.isArray(checked)) {
-                            setCheckedKeys(checked);
-                        } else {
-                            setCheckedKeys(checked.checked);
-                        }
-                    }}
-                    expandedKeys={expandedKeys}
-                    onExpand={(expanded) => {
-                        setExpandedKeys(expanded);
-                        setAutoExpandParent(false);
-                    }}
-                    autoExpandParent={autoExpandParent}
-                    icon={(props: any) => {
-                        if (props.isLeaf) return <ColumnHeightOutlined style={{fontSize: 11, color: '#8c8c8c'}} />;
-                        return <TableOutlined style={{color: '#1677ff'}} />;
-                    }}
-                />
+            <div style={{flex: 1, overflow: 'hidden', padding: '8px 0', position: 'relative'}}>
+                {loading ? (
+                    <div style={{
+                        display: 'flex', 
+                        justifyContent: 'center', 
+                        alignItems: 'center', 
+                        height: '100%',
+                        width: '100%'
+                    }}>
+                        <Spin tip="正在加载表结构..." />
+                    </div>
+                ) : (
+                    <div style={{height: '100%', overflow: 'auto'}}>
+                    <DirectoryTree
+                        checkable
+                        multiple
+                        draggable // Enable draggable
+                        onDragStart={(info) => {
+                            // Store dragged node info in dataTransfer
+                            // We only want to drag table names or column names as text
+                            info.event.dataTransfer.setData('text/plain', info.node.key as string);
+                            // Also store a custom type to verify source
+                            info.event.dataTransfer.setData('application/x-smallmo-schema', JSON.stringify({
+                                key: info.node.key,
+                                title: (info.node as any).title?.props?.children?.[0]?.props?.children || info.node.key
+                            }));
+                        }}
+                        treeData={treeData}
+                        showIcon
+                        style={{background: 'transparent', fontSize: 13}}
+                        // height={800} // Virtual scroll removed for better auto-sizing
+                        checkedKeys={checkedKeys}
+                        onCheck={(checked) => {
+                            if (Array.isArray(checked)) {
+                                setCheckedKeys(checked);
+                            } else {
+                                setCheckedKeys(checked.checked);
+                            }
+                        }}
+                        expandedKeys={expandedKeys}
+                        onExpand={(expanded) => {
+                            setExpandedKeys(expanded);
+                            setAutoExpandParent(false);
+                        }}
+                        autoExpandParent={autoExpandParent}
+                        icon={(props: any) => {
+                            if (props.isLeaf) return <ColumnHeightOutlined style={{fontSize: 11, color: '#8c8c8c'}} />;
+                            return <TableOutlined style={{color: '#1677ff'}} />;
+                        }}
+                    />
+                    </div>
+                )}
             </div>
         </div>
     );

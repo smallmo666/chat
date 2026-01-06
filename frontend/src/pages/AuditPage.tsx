@@ -1,8 +1,7 @@
 import { Table, Tag, Drawer, Descriptions, Typography, Timeline, Card, Button } from 'antd';
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, CodeOutlined, ProjectOutlined } from '@ant-design/icons';
-import ReactMarkdown from 'react-markdown';
+import { ClockCircleOutlined, CheckCircleOutlined, CodeOutlined, ProjectOutlined } from '@ant-design/icons';
 import api from '../lib/api';
 
 const { Title, Text, Paragraph } = Typography;
@@ -34,11 +33,9 @@ const AuditPage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      let url = '/api/audit/logs';
-      if (projectId) {
-          url += `?project_id=${projectId}`;
-      }
-      const res = await api.get(url);
+      const res = await api.post('/api/audit/logs/list', {
+          project_id: projectId ? parseInt(projectId) : undefined
+      });
       setData(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error(error);
@@ -166,7 +163,7 @@ const AuditPage = () => {
                                           <Text type="secondary">{step.desc}</Text>
                                       </>
                                   ),
-                                  dot: step.status === 'finish' || step.status === 'completed' ? <CheckCircleOutlined /> : <ClockCircleOutlined />
+                                  icon: step.status === 'finish' || step.status === 'completed' ? <CheckCircleOutlined /> : <ClockCircleOutlined />
                               }))}
                           />
                       </Card>

@@ -55,9 +55,44 @@ class QueryDatabase:
                 pool_recycle=3600   # 1小时回收连接
             )
             
+            # 多数据库支持：缓存不同数据库的 Engine
+            self._db_engines = {"default": self.async_engine}
+            
             print(f"已连接到查询数据库 (Async): {self.host}:{self.port}/{self.dbname}")
         except Exception as e:
             print(f"查询数据库连接失败: {e}")
+            raise e
+
+    def _get_engine_for_db(self, db_name: str) -> AsyncEngine:
+        """
+        获取或创建指定数据库的 AsyncEngine。
+        """
+        if db_name in self._db_engines:
+            return self._db_engines[db_name]
+            
+        print(f"QueryDatabase: Initializing engine for target database: {db_name}")
+        
+        # 构建新的连接字符串 (复用 host, user, password, port)
+        if self.type == "postgresql":
+            conn_str = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{db_name}"
+        elif self.type == "mysql":
+            conn_str = f"mysql+aiomysql://{self.user}:{self.password}@{self.host}:{self.port}/{db_name}"
+        else:
+            raise ValueError(f"Unsupported database type for routing: {self.type}")
+            
+        try:
+            engine = create_async_engine(
+                conn_str,
+                pool_pre_ping=True,
+                poolclass=AsyncAdaptedQueuePool,
+                pool_size=5,
+                max_overflow=10,
+                pool_recycle=3600
+            )
+            self._db_engines[db_name] = engine
+            return engine
+        except Exception as e:
+            print(f"Failed to connect to target database {db_name}: {e}")
             raise e
 
     def _get_sync_engine(self):
@@ -157,17 +192,45 @@ class QueryDatabase:
     async def run_query_async(self, query: str) -> dict:
         """
         使用 AsyncEngine 异步执行 SQL 查询。
+        支持简单的多数据库路由 (基于 'dbname.table' 命名约定)。
         """
         print(f"DEBUG: QueryDatabase.run_query_async - Executing: {query}")
         try:
             modified_query = query
+            target_engine = self.async_engine # Default
             
-            # 简单的上下文切换逻辑 (目前针对异步进行了简化)
-            # 在全异步模式下，如果不复用 engine，动态切换比较困难。
-            # 这里假设已连接到正确的 DB 或使用全限定名查询。
+            # --- 简单的 SQL 路由逻辑 ---
+            # 检查是否包含 "FROM dbname.tablename" 模式
+            # 正则匹配 FROM 或 JOIN 后的 db.table
+            # 假设 dbname 是纯字母数字下划线
+            match = re.search(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)', query, re.IGNORECASE)
             
-            print("DEBUG: QueryDatabase.run_query_async - Connecting...")
-            async with self.async_engine.connect() as conn:
+            if match:
+                db_name = match.group(1)
+                table_name = match.group(2)
+                
+                # 如果 db_name 不是 SQL 关键字且看起来像数据库名
+                # 简单的启发式：如果它在我们的 Schema 检查列表中 (需要维护或动态发现)
+                # 这里我们假设只要是 db.table 格式，前缀就是数据库名
+                
+                print(f"DEBUG: Routing - Detected target database: {db_name}")
+                
+                try:
+                    target_engine = self._get_engine_for_db(db_name)
+                    
+                    # 重写 SQL: 移除数据库前缀
+                    # 替换所有 "db_name." 为 "" (空字符串)
+                    # 注意：这可能会误伤字符串字面量中的内容，但在 Text2SQL 生成的简单 SQL 中风险较低
+                    # 更严谨的做法是使用 SQL Parser，但这里用正则简单处理
+                    modified_query = re.sub(rf'\b{db_name}\.', '', query)
+                    print(f"DEBUG: Routing - Rewritten SQL for {db_name}: {modified_query}")
+                    
+                except Exception as e:
+                    print(f"Routing failed, falling back to default DB: {e}")
+            # ---------------------------
+            
+            print(f"DEBUG: QueryDatabase.run_query_async - Connecting...")
+            async with target_engine.connect() as conn:
                 print("DEBUG: QueryDatabase.run_query_async - Connected. Executing...")
                 # 异步执行
                 result = await conn.execute(text(modified_query))

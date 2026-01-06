@@ -4,8 +4,6 @@ import threading
 from typing import Optional, List
 from sentence_transformers import SentenceTransformer
 import chromadb
-from chromadb.config import Settings
-import json
 
 class SemanticCache:
     """

@@ -1,87 +1,135 @@
 import pandas as pd
+import json
+import asyncio
 from typing import Dict, Any, List, Optional
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel, Field
 
-class VisualizationAdvisor:
+from src.workflow.state import AgentState
+from src.core.llm import get_llm
+
+class VizRecommendation(BaseModel):
+    chart_type: str = Field(..., description="Recommended chart type (bar, line, pie, scatter, table, map)")
+    x_axis: str = Field(..., description="Column for X-axis or Category")
+    y_axis: List[str] = Field(..., description="Columns for Y-axis or Value")
+    reason: str = Field(..., description="Reason for recommendation")
+    title: str = Field(..., description="Chart title")
+
+VIZ_ADVISOR_PROMPT = """
+你是一个数据可视化专家。请根据数据特征和用户查询，推荐最合适的图表类型。
+
+用户查询: {query}
+
+数据概览:
+- 列名: {columns}
+- 数据类型: {dtypes}
+- 样本数据 (前3行):
+{sample_data}
+
+### 推荐原则:
+1. **趋势分析** (关键词: 趋势, 变化, 走势): 优先 **Line Chart**。通常 X 轴为时间。
+2. **比较分析** (关键词: 对比, 排名, Top): 优先 **Bar Chart**。
+3. **占比分析** (关键词: 占比, 分布, 构成): 如果类别少 (<8)，用 **Pie Chart**；否则用 Bar Chart。
+4. **关系分析**: 两个数值列的相关性用 **Scatter Chart**。
+5. **明细查询**: 如果用户想看详细信息，推荐 **Table**。
+
+### 输出要求:
+请输出严格的 JSON 格式，必须包含以下字段（键名必须是英文）:
+- "chart_type": string (bar, line, pie, scatter, table, map)
+- "x_axis": string (X轴字段名)
+- "y_axis": list[string] (Y轴字段名列表)
+- "title": string (图表标题)
+- "reason": string (推荐理由)
+
+示例:
+{{
+    "chart_type": "bar",
+    "x_axis": "region",
+    "y_axis": ["sales"],
+    "title": "各地区销售额对比",
+    "reason": "用户查询各地区销售情况，且类别数量适中，适合用柱状图展示。"
+}}
+"""
+
+async def visualization_advisor_node(state: AgentState, config: dict = None) -> dict:
     """
-    基于数据特征推荐最佳可视化图表类型。
+    可视化顾问节点。
+    结合规则 (Pandas Profiling) 和 LLM 语义理解，生成最佳图表配置。
     """
+    print("DEBUG: Entering visualization_advisor_node")
     
-    def analyze_data(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        分析数据特征并推荐图表。
-        """
-        if not data:
-            return {"recommended_chart": "none", "reason": "无数据"}
+    project_id = config.get("configurable", {}).get("project_id") if config else None
+    llm = get_llm(node_name="VizAdvisor", project_id=project_id)
+    
+    # 获取上下文
+    query = ""
+    for msg in reversed(state["messages"]):
+        if msg.type == "human":
+            query = msg.content
+            break
+            
+    results_str = state.get("results", "[]")
+    
+    try:
+        data = json.loads(results_str)
+        if not data or not isinstance(data, list):
+            print("VizAdvisor: No valid data found.")
+            return {"visualization": None}
             
         df = pd.DataFrame(data)
         
-        # 1. 识别列类型
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        datetime_cols = []
-        category_cols = []
+        # 1. Data Profiling
+        columns = df.columns.tolist()
+        dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
+        sample_data = df.head(3).to_dict(orient='records')
         
-        for col in df.select_dtypes(include=['object', 'string']).columns:
-            # 尝试转换为时间
-            try:
-                pd.to_datetime(df[col], errors='raise')
-                datetime_cols.append(col)
-            except:
-                category_cols.append(col)
-                
-        # 2. 规则推荐
-        recommendation = "table"
-        reason = "默认展示表格"
-        x_axis = None
-        y_axis = None
+        # 2. LLM Recommendation (Manual JSON Parsing for Robustness)
+        prompt = ChatPromptTemplate.from_template(VIZ_ADVISOR_PROMPT)
+        chain = prompt | llm
         
-        # 规则 1: 趋势分析 (时间序列)
-        if datetime_cols and numeric_cols:
-            recommendation = "line"
-            if len(numeric_cols) > 1:
-                reason = f"检测到时间列 '{datetime_cols[0]}' 和多个数值列 ({', '.join(numeric_cols)})，适合展示多维趋势对比。"
-            else:
-                reason = f"检测到时间列 '{datetime_cols[0]}' 和数值列，适合展示趋势。"
-            x_axis = datetime_cols[0]
-            y_axis = numeric_cols
+        try:
+            response = await chain.ainvoke({
+                "query": query,
+                "columns": columns,
+                "dtypes": dtypes,
+                "sample_data": sample_data
+            })
             
-        # 规则 2: 类别比较 (柱状图)
-        elif category_cols and numeric_cols:
-            # 如果类别太多，不适合柱状图，可能适合条形图
-            unique_count = df[category_cols[0]].nunique()
-            if unique_count <= 20:
-                recommendation = "bar"
-                if len(numeric_cols) > 1:
-                    reason = f"检测到类别列 '{category_cols[0]}' 和多个数值列 ({', '.join(numeric_cols)})，适合进行分组对比。"
-                else:
-                    reason = f"检测到类别列 '{category_cols[0]}' (基数={unique_count})，适合对比。"
-                x_axis = category_cols[0]
-                y_axis = numeric_cols
-            else:
-                recommendation = "table"
-                reason = "类别过多，建议表格展示。"
+            content = response.content.strip()
+            # Clean Markdown
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
                 
-        # 规则 3: 占比分析 (饼图)
-        # 仅当只有1个类别列和1个数值列，且行数较少时
-        if len(category_cols) == 1 and len(numeric_cols) == 1 and len(df) <= 8:
-            recommendation = "pie"
-            reason = "数据量少且包含单一类别与数值，适合饼图。"
-            x_axis = category_cols[0]
-            y_axis = numeric_cols
+            viz_config = json.loads(content)
             
-        return {
-            "recommended_chart": recommendation,
-            "reason": reason,
-            "x_axis": x_axis,
-            "y_axis": y_axis,
-            "columns": {
-                "numeric": numeric_cols,
-                "datetime": datetime_cols,
-                "category": category_cols
+            # Simple validation
+            if "chart_type" not in viz_config:
+                viz_config["chart_type"] = "table"
+                viz_config["reason"] = "Fallback: Missing chart_type in LLM response."
+                
+        except Exception as parse_error:
+            print(f"VizAdvisor: JSON Parse/Validation Failed: {parse_error}. Using fallback.")
+            # Fallback configuration
+            viz_config = {
+                "chart_type": "table",
+                "x_axis": columns[0] if columns else "",
+                "y_axis": columns[1:] if len(columns) > 1 else [],
+                "title": "Data Preview",
+                "reason": "Automatic fallback due to visualization recommendation failure."
             }
-        }
-
-# 全局实例
-_advisor = VisualizationAdvisor()
-
-def get_viz_advisor():
-    return _advisor
+        
+        print(f"DEBUG: Viz Recommendation: {viz_config.get('chart_type')} ({viz_config.get('reason')})")
+        
+        # 3. 增强：添加数据特征
+        if viz_config.get("chart_type") == "bar" and df[viz_config.get("x_axis", "")].nunique() > 20:
+             print("VizAdvisor: Too many categories for bar chart.")
+        
+        return {"visualization": viz_config}
+        
+    except Exception as e:
+        print(f"VizAdvisor failed: {e}")
+        # Final fallback to avoid infinite loops
+        return {"visualization": {"chart_type": "table", "reason": "System Error Fallback"}}

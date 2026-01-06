@@ -1,7 +1,7 @@
 import chromadb
 import uuid
 import threading
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 class FewShotRetriever:
     """

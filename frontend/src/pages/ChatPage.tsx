@@ -161,6 +161,18 @@ const ChatPageContent: React.FC = () => {
                     logs: []
                 }));
                 setTasks(newTasks);
+                // Also update the current agent message with the plan
+                setMessages(prev => {
+                    const newMsgs = [...prev];
+                    const lastMsg = newMsgs[newMsgs.length - 1];
+                    if (lastMsg && lastMsg.role === 'agent') {
+                        newMsgs[newMsgs.length - 1] = {
+                            ...lastMsg,
+                            plan: newTasks
+                        };
+                    }
+                    return newMsgs;
+                });
               }
               else if (eventType === 'step') {
                 updateStepStatus(data.node, data.status, data.details, data.duration);
@@ -218,11 +230,49 @@ const ChatPageContent: React.FC = () => {
               else if (eventType === 'ui_generated') {
                   const code = data.content;
                   // Set content to a simple text, ChatWindow will handle rendering via uiComponent field
-                  setMessages(prev => [...prev, { 
-                      role: 'agent', 
-                      content: 'UI 组件已生成', 
-                      uiComponent: code 
-                  }]);
+                  setMessages(prev => {
+                      const newMsgs = [...prev];
+                      // Find if we have a message for Python analysis that can be merged, or create new
+                      // Typically UI generation comes after python analysis or viz.
+                      
+                      // For simplicity, we just append or update the last agent message
+                      // But we need to be careful not to overwrite 'thinking' or 'content' if they are streaming
+                      
+                      // Check if last message is agent and has empty content or is related
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      if (lastMsg && lastMsg.role === 'agent') {
+                          // Merge into last message
+                          newMsgs[newMsgs.length - 1] = {
+                              ...lastMsg,
+                              content: 'UI 组件已生成',
+                              uiComponent: code
+                          };
+                      } else {
+                          newMsgs.push({ 
+                              role: 'agent', 
+                              content: 'UI 组件已生成', 
+                              uiComponent: code 
+                          });
+                      }
+                      return newMsgs;
+                  });
+              }
+              else if (eventType === 'python_images') {
+                  const images = data.content; // Array of base64 strings
+                  setMessages(prev => {
+                      const newMsgs = [...prev];
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      if (lastMsg && lastMsg.role === 'agent') {
+                          newMsgs[newMsgs.length - 1] = {
+                              ...lastMsg,
+                              images: images
+                          };
+                      } else {
+                          // Should not happen usually, but fallback
+                          newMsgs.push({ role: 'agent', content: '图表已生成', images: images });
+                      }
+                      return newMsgs;
+                  });
               }
               else if (eventType === 'code_generated') {
                 const codeContent = (
@@ -447,6 +497,7 @@ const ChatPageContent: React.FC = () => {
                         isLoading={isLoading}
                         onSendMessage={handleSendMessage}
                         latestData={latestData}
+                        projectId={projectId}
                     />
                  </div>
 
@@ -456,8 +507,7 @@ const ChatPageContent: React.FC = () => {
                     placement="left"
                     onClose={() => setShowSchema(false)}
                     open={showSchema}
-                    width="85%"
-                    styles={{ body: { padding: 0 } }}
+                    styles={{ body: { padding: 0 }, wrapper: { width: '85%' } }}
                  >
                      <SchemaBrowser />
                  </Drawer>
@@ -467,17 +517,19 @@ const ChatPageContent: React.FC = () => {
                     placement="right"
                     onClose={() => setShowTasks(false)}
                     open={showTasks}
-                    width="85%"
-                    styles={{ body: { padding: 0 } }}
+                    styles={{ body: { padding: 0 }, wrapper: { width: '85%' } }}
                  >
                      <TaskTimeline tasks={tasks} />
                  </Drawer>
              </div>
           ) : (
              // Desktop Layout: Splitter
-             <Splitter style={{ height: '100%', background: '#ffffff', borderRadius: 0, boxShadow: 'none', border: 'none' }}>
+             <Splitter 
+                style={{ height: '100%', background: '#ffffff', borderRadius: 0, boxShadow: 'none', border: 'none' }}
+                onResize={(sizes) => setLeftPanelSize(sizes[0])}
+             >
               {/* Left Sidebar: Schema Browser */}
-              <Splitter.Panel defaultSize={leftPanelSize} min="0%" max="40%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}} size={leftPanelSize} onResize={(size) => setLeftPanelSize(size)}>
+              <Splitter.Panel min="0%" max="40%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}} size={leftPanelSize}>
                  <SchemaBrowser 
                     onCollapse={() => setLeftPanelSize(0)} 
                     isCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)} 
@@ -492,6 +544,7 @@ const ChatPageContent: React.FC = () => {
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
                     latestData={latestData}
+                    projectId={projectId}
                     onToggleSidebar={() => {
                         if (leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)) {
                             setLeftPanelSize('20%');

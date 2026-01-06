@@ -22,6 +22,7 @@ from src.workflow.nodes.correct_sql import correct_sql_node
 from src.workflow.nodes.detective import data_detective_node 
 from src.workflow.nodes.insight import insight_miner_node 
 from src.workflow.nodes.artist import ui_artist_node 
+from src.workflow.nodes.visualization_advisor import visualization_advisor_node
 from src.workflow.nodes.knowledge_retrieval import knowledge_retrieval_node
 from opentelemetry import trace
 import inspect
@@ -83,6 +84,9 @@ def create_graph():
     # Visualization: 纯 ECharts 可视化 (原 AnalysisViz 已废弃)
     workflow.add_node("Visualization", trace_node(visualization_node, "Visualization"))
     
+    # VisualizationAdvisor: 智能图表推荐
+    workflow.add_node("VisualizationAdvisor", trace_node(visualization_advisor_node, "VisualizationAdvisor"))
+
     # PythonAnalysis: 高级数据分析 (Pandas/Matplotlib)
     workflow.add_node("PythonAnalysis", trace_node(python_analysis_node, "PythonAnalysis"))
     
@@ -140,6 +144,9 @@ def create_graph():
     # Visualization -> Supervisor
     workflow.add_edge("Visualization", "Supervisor")
 
+    # VisualizationAdvisor -> Supervisor
+    workflow.add_edge("VisualizationAdvisor", "Supervisor")
+
     # PythonAnalysis -> Supervisor
     workflow.add_edge("PythonAnalysis", "Supervisor")
     
@@ -164,6 +171,7 @@ def create_graph():
             "ExecuteSQL": "ExecuteSQL",
             "TableQA": "TableQA",
             "Visualization": "Visualization",
+            "VisualizationAdvisor": "VisualizationAdvisor", # 注册 Advisor
             "PythonAnalysis": "PythonAnalysis",
             "InsightMiner": "InsightMiner", 
             "UIArtist": "UIArtist", # 注册 UIArtist

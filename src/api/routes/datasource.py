@@ -75,7 +75,7 @@ async def test_datasource_connection(ds: DataSourceCreate):
         print(f"Test connection failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("", response_model=List[DataSourceRead])
+@router.post("/list", response_model=List[DataSourceRead])
 def get_datasources(
     app_db: AppDatabase = Depends(get_app_db),
     current_user: User = Depends(get_current_user)

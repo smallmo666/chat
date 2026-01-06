@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from src.workflow.state import AgentState
 from src.core.llm import get_llm
-from src.workflow.nodes.visualization_advisor import get_viz_advisor
 
 llm = None # 将在节点内部初始化
 
@@ -24,8 +23,7 @@ class EChartsOption(BaseModel):
 async def visualization_node(state: AgentState, config: dict = None) -> dict:
     """
     可视化节点。
-    结合规则推荐 (VisualizationAdvisor) 和 LLM 生成 ECharts 配置。
-    自动处理大数据集的降采样。
+    根据 VisualizationAdvisor 的建议 (viz_config) 和数据，生成具体的 ECharts 配置。
     """
     query = ""
     for msg in reversed(state["messages"]):
@@ -36,45 +34,48 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
     project_id = config.get("configurable", {}).get("project_id") if config else None
     llm = get_llm(node_name="Visualization", project_id=project_id)
     results = state.get("results", "")
+    viz_config = state.get("visualization", {}) # 获取 Advisor 的建议
     
     # 简单的启发式检查：如果没有结果或结果是空的/错误的，跳过
     if not results or "Error" in results or "Empty" in results:
         return {"visualization": None}
 
-    # --- 1. 数据解析与规则推荐 (异步快速路径) ---
+    # --- 1. 数据解析 ---
     MAX_DATA_POINTS = 2000
-
-    def _process_data_and_advise():
-        """在线程池中运行 CPU 密集型任务：JSON 解析、截断和 Pandas 分析"""
-        parsed_data = []
-        try:
-            parsed_data = json.loads(results)
-            if not isinstance(parsed_data, list):
-                parsed_data = []
-        except:
-            pass
-            
-        original_count = len(parsed_data)
-        is_truncated = False
-        
-        if original_count > MAX_DATA_POINTS:
-            # 简单截断
-            parsed_data = parsed_data[:MAX_DATA_POINTS]
-            is_truncated = True
-            print(f"Visualization: Data truncated from {original_count} to {MAX_DATA_POINTS} points.")
-
-        advisor = get_viz_advisor()
-        # analyze_data 内部使用 pandas，属于 CPU 密集型
-        advice = advisor.analyze_data(parsed_data)
-        print(f"DEBUG: Viz Advisor Recommendation: {advice['recommended_chart']} ({advice['reason']})")
-        
-        return parsed_data, advice, is_truncated, original_count
-
-    # 异步执行数据处理
-    parsed_data, advice, is_truncated, original_count = await asyncio.to_thread(_process_data_and_advise)
     
+    parsed_data = []
+    try:
+        parsed_data = json.loads(results)
+        if not isinstance(parsed_data, list):
+            parsed_data = []
+    except:
+        pass
+        
+    original_count = len(parsed_data)
+    is_truncated = False
+    
+    if original_count > MAX_DATA_POINTS:
+        # 简单截断
+        parsed_data = parsed_data[:MAX_DATA_POINTS]
+        is_truncated = True
+        print(f"Visualization: Data truncated from {original_count} to {MAX_DATA_POINTS} points.")
+
+    # 如果没有 Advisor 建议，或者建议是 table，直接返回表格
+    # 或者如果 Advisor 建议了某种图表，我们就生成它
+    
+    recommended_chart = "table"
+    reason = "默认展示"
+    x_axis_hint = "自动推断"
+    y_axis_hint = "自动推断"
+    
+    if viz_config:
+        recommended_chart = viz_config.get("chart_type", "table")
+        reason = viz_config.get("reason", "")
+        x_axis_hint = viz_config.get("x_axis", "自动推断")
+        y_axis_hint = str(viz_config.get("y_axis", "自动推断"))
+
     # 如果推荐是表格，直接返回，不浪费 LLM Token
-    if advice["recommended_chart"] == "table" and parsed_data:
+    if recommended_chart == "table" and parsed_data:
         columns = list(parsed_data[0].keys()) if parsed_data else []
         return {
             "visualization": {
@@ -83,9 +84,11 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
                     "columns": columns,
                     "data": parsed_data
                 },
-                "reason": advice["reason"],
+                "reason": reason,
                 "is_truncated": is_truncated,
-                "original_count": original_count
+                "original_count": original_count,
+                # 保留原始建议供后续参考
+                "advisor_config": viz_config 
             }
         }
     # ----------------------------------------------------
@@ -95,6 +98,7 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
         "你是一个前端数据可视化专家。请根据用户的查询、数据特征和专家建议，生成 ECharts 可视化配置。\n"
         "用户问题: {query}\n"
         "专家建议: 推荐使用 **{recommended_chart}**，原因：{reason}\n"
+        "建议维度: X轴={x_axis}, Y轴={y_axis}\n"
         "数据样本 (JSON):\n{data_sample}\n\n"
         "任务要求：\n"
         "1. **图表类型**：请严格采纳专家的建议类型 ({recommended_chart})。如果是 'none' 或 'table'，则生成表格。\n"
@@ -117,14 +121,10 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
         # 准备 Prompt 上下文
         data_sample = json.dumps(parsed_data[:5], ensure_ascii=False) # 只给前5条作为样本
         
-        # 构建维度提示
-        x_axis_hint = advice.get("x_axis") or "自动推断"
-        y_axis_hint = ", ".join(advice.get("y_axis", [])) or "自动推断"
-        
         viz_data = await chain.ainvoke({
             "query": query,
-            "recommended_chart": advice["recommended_chart"],
-            "reason": advice["reason"],
+            "recommended_chart": recommended_chart,
+            "reason": reason,
             "data_sample": data_sample,
             "x_axis": x_axis_hint,
             "y_axis": y_axis_hint
@@ -181,3 +181,4 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
                 }
             }
         return {"visualization": None}
+

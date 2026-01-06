@@ -31,7 +31,7 @@ def create_llm_provider(
         session.refresh(db_llm)
         return db_llm
 
-@router.get("", response_model=List[LLMProviderRead])
+@router.post("/list", response_model=List[LLMProviderRead])
 def get_llm_providers(app_db: AppDatabase = Depends(get_app_db)):
     with app_db.get_session() as session:
         providers = session.exec(select(LLMProvider)).all()

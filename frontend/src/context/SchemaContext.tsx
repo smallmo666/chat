@@ -21,11 +21,7 @@ export const SchemaProvider: React.FC<{ children: ReactNode; projectId?: string 
     const fetchTables = async () => {
         setLoading(true);
         try {
-            let url = '/api/projects/tables';
-            if (projectId) {
-                url += `?project_id=${projectId}`;
-            }
-            const res = await api.get(url);
+            const res = await api.post('/api/projects/tables', { project_id: projectId ? parseInt(projectId) : undefined });
             const data = res.data;
             if (data.tables) {
                 setDbTables(data.tables);

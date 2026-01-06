@@ -1,5 +1,6 @@
 import asyncio
 import re
+import difflib
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ from src.core.llm import get_llm
 from src.domain.schema.search import get_schema_searcher
 from src.core.database import get_query_db
 from src.core.sql_security import is_safe_sql
+from src.domain.knowledge.glossary import get_glossary_retriever
 
 llm = None # Will be initialized in node
 
@@ -33,6 +35,10 @@ BASE_SYSTEM_PROMPT = """
 参考表结构 (Schema):
 {schema_context}
 
+{fuzzy_match_hint}
+
+{glossary_context}
+
 请仔细分析错误原因（例如：列名拼写错误、GROUP BY 缺失、类型不匹配等），并利用提供的 Schema 信息找到正确的表名或列名。
 如果错误提示“Column not found”且你在 Schema 中发现了相似的列名，请大胆修正。
 只输出修复后的 SQL，不要输出其他废话。
@@ -44,6 +50,7 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
     增强版：注入 Schema RAG 信息以辅助修复，支持动态方言。
     **自愈增强**: 当检测到 'Column not found' 时，主动探测 Schema。
     **安全增强**: 对修复后的 SQL 进行安全检查。
+    **反馈增强**: 模糊匹配列名，知识注入。
     """
     print("DEBUG: Entering correct_sql_node (Async)")
     
@@ -70,6 +77,8 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
     schema_context = ""
     is_column_error = "column" in error_message.lower() or "field" in error_message.lower()
     
+    probed_schema_dict = None # 保存探测到的 Schema 字典用于模糊匹配
+
     if is_column_error and query_db:
         print("DEBUG: CorrectSQL - Detected Column/Field error, initiating Schema Probe...")
         try:
@@ -88,10 +97,10 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
                 
                 # 格式化为 Context 字符串
                 import json
-                schema_dict = json.loads(realtime_schema_json)
+                probed_schema_dict = json.loads(realtime_schema_json)
                 
                 schema_context_lines = ["*** REAL-TIME SCHEMA PROBE RESULT ***"]
-                for table, info in schema_dict.items():
+                for table, info in probed_schema_dict.items():
                     cols = [f"{c['name']} ({c['type']})" for c in info.get('columns', [])]
                     schema_context_lines.append(f"Table: {table}")
                     schema_context_lines.append(f"Columns: {', '.join(cols)}")
@@ -115,17 +124,59 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
         except Exception as e:
             print(f"Failed to retrieve schema from RAG: {e}")
             schema_context = "暂无 Schema 信息"
-    
+            
+    # --- Fuzzy Matching Logic (模糊匹配) ---
+    fuzzy_match_hint = ""
+    if is_column_error and probed_schema_dict:
+        # 尝试从 SQL 中提取出错的列名（比较难精准，这里假设用户提到的列在 error message 里，或者我们遍历 SQL 里的列）
+        # 简化策略：遍历 schema 里的所有列，看是否和 wrong_sql 里的单词有拼写相近的
+        
+        sql_tokens = set(re.findall(r'\b[a-zA-Z0-9_]+\b', wrong_sql))
+        all_real_columns = []
+        for table, info in probed_schema_dict.items():
+            for col in info.get('columns', []):
+                all_real_columns.append(col['name'])
+        
+        matches = []
+        for token in sql_tokens:
+            if token.upper() in ["SELECT", "FROM", "WHERE", "AND", "OR", "JOIN", "ON", "GROUP", "BY", "ORDER", "LIMIT"]:
+                continue
+            
+            # 如果 token 已经是真实列名，跳过
+            if token in all_real_columns:
+                continue
+                
+            # 寻找相似列
+            close_matches = difflib.get_close_matches(token, all_real_columns, n=1, cutoff=0.8)
+            if close_matches:
+                matches.append(f"'{token}' -> '{close_matches[0]}'")
+        
+        if matches:
+            fuzzy_match_hint = "### 拼写纠错建议 (Fuzzy Matches):\n系统检测到可能的列名拼写错误:\n" + "\n".join(matches)
+            print(f"DEBUG: Fuzzy matches found: {matches}")
+            
+    # --- Knowledge Injection ---
+    glossary_context = ""
+    try:
+        retriever = get_glossary_retriever(project_id)
+        # 使用 wrong_sql 作为检索上下文可能不太好，但聊胜于无，或者结合 error message
+        glossary_context = retriever.retrieve(wrong_sql + " " + error_message)
+    except Exception as e:
+        print(f"Glossary retrieval failed in correct_sql: {e}")
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", BASE_SYSTEM_PROMPT),
     ]).partial(
         error_message=error_message, 
         wrong_sql=wrong_sql, 
         schema_context=schema_context,
-        dialect=db_type
+        dialect=db_type,
+        fuzzy_match_hint=fuzzy_match_hint,
+        glossary_context=glossary_context
     )
     
     chain = prompt | llm.with_structured_output(CorrectionResponse)
+
     
     try:
         # 异步调用 LLM

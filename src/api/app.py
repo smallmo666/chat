@@ -1,9 +1,6 @@
 import warnings
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from phoenix.otel import register
-from openinference.instrumentation.langchain import LangChainInstrumentor
 
 from src.core.database import get_app_db
 from src.workflow.graph import create_graph
