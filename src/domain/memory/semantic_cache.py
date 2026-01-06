@@ -96,6 +96,33 @@ class SemanticCache:
             metadatas=[{"sql": sql, "query": query}]
         )
 
+    def delete(self, query: str, threshold: float = 0.95):
+        """
+        删除与 query 相似的缓存条目（用于负反馈处理）。
+        """
+        if not self.collection or not self.encoder:
+            return
+
+        query_embedding = self._embed(query)
+        
+        # 查找非常相似的记录 (High threshold)
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=1,
+            include=["metadatas", "distances", "ids"]
+        )
+        
+        if not results["ids"][0]:
+            return
+            
+        distance = results["distances"][0][0]
+        
+        # 只有确实很像才删，防止误删
+        if distance < (1 - threshold):
+            target_id = results["ids"][0][0]
+            print(f"DEBUG: Removing semantic cache entry {target_id} due to negative feedback. Distance: {distance}")
+            self.collection.delete(ids=[target_id])
+
 # Factory/Singleton
 _cache_instances = {}
 _cache_lock = threading.Lock()

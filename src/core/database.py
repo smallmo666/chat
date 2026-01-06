@@ -1,6 +1,7 @@
 import os
 import random
 import pandas as pd
+import hashlib
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
 from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
@@ -10,6 +11,7 @@ import json
 import re
 from src.core.models import DataSource, Project, AuditLog
 from src.core.config import settings
+from src.core.redis_client import get_redis_client
 
 load_dotenv()
 
@@ -115,11 +117,30 @@ class QueryDatabase:
         finally:
             engine.dispose()
 
-    def inspect_schema(self, scope_config: dict = None) -> str:
+    def inspect_schema(self, scope_config: dict = None, project_id: int = None) -> str:
         """
         检查表结构。
         使用临时同步连接，因为 SQLAlchemy Inspector 目前主要支持同步 API。
+        支持 Redis 缓存。
         """
+        # Try to retrieve from Redis cache if project_id is provided
+        cache_key = None
+        redis_client = None
+        if project_id:
+            try:
+                redis_client = get_redis_client()
+                # Create a unique hash for the scope config
+                scope_str = json.dumps(scope_config, sort_keys=True) if scope_config else "full"
+                scope_hash = hashlib.md5(scope_str.encode()).hexdigest()
+                cache_key = f"schema:{project_id}:{scope_hash}"
+                
+                cached_schema = redis_client.get(cache_key)
+                if cached_schema:
+                    print(f"QueryDB: Schema cache hit for {cache_key}")
+                    return cached_schema
+            except Exception as e:
+                print(f"Redis cache error: {e}")
+
         schema_info = {}
         
         # 确定目标数据库/Schema 的逻辑
@@ -187,14 +208,43 @@ class QueryDatabase:
             except Exception as e:
                 print(f"检查数据库 {db_name} 时出错: {e}")
             
-        return json.dumps(schema_info, ensure_ascii=False)
+        result_json = json.dumps(schema_info, ensure_ascii=False)
+        
+        # Save to Redis cache
+        if cache_key and redis_client:
+            try:
+                # Cache for 1 hour
+                redis_client.setex(cache_key, 3600, result_json)
+                print(f"QueryDB: Schema cached to Redis: {cache_key}")
+            except Exception as e:
+                print(f"Failed to save schema to Redis: {e}")
+                
+        return result_json
 
-    async def run_query_async(self, query: str) -> dict:
+    async def run_query_async(self, query: str, project_id: int = None) -> dict:
         """
         使用 AsyncEngine 异步执行 SQL 查询。
         支持简单的多数据库路由 (基于 'dbname.table' 命名约定)。
+        支持 SQL 结果缓存。
         """
         print(f"DEBUG: QueryDatabase.run_query_async - Executing: {query}")
+        
+        # Check Query Cache
+        cache_key = None
+        redis_client = None
+        if project_id:
+            try:
+                redis_client = get_redis_client()
+                query_hash = hashlib.md5(query.strip().lower().encode()).hexdigest()
+                cache_key = f"sql_result:{project_id}:{query_hash}"
+                
+                cached_result = redis_client.get(cache_key)
+                if cached_result:
+                    print(f"DEBUG: SQL Cache Hit for {cache_key}")
+                    return json.loads(cached_result)
+            except Exception as e:
+                print(f"Redis cache check error: {e}")
+                
         try:
             modified_query = query
             target_engine = self.async_engine # Default
@@ -242,19 +292,29 @@ class QueryDatabase:
                 print(f"DEBUG: QueryDatabase.run_query_async - Fetched {len(data)} rows.")
                 
                 if not data:
-                    return {
+                    res = {
                         "markdown": "查询执行成功，但结果为空。",
                         "json": "[]",
                         "error": None
                     }
-                    
-                # 使用 pandas 进行简单的格式化 (在内存中)
-                df = pd.DataFrame(data)
-                return {
-                    "markdown": df.to_markdown(index=False),
-                    "json": df.to_json(orient='records', force_ascii=False),
-                    "error": None
-                }
+                else:
+                    # 使用 pandas 进行简单的格式化 (在内存中)
+                    df = pd.DataFrame(data)
+                    res = {
+                        "markdown": df.to_markdown(index=False),
+                        "json": df.to_json(orient='records', force_ascii=False),
+                        "error": None
+                    }
+                
+                # Save to Cache
+                if cache_key and redis_client:
+                    try:
+                        # Cache for 5 minutes
+                        redis_client.setex(cache_key, 300, json.dumps(res))
+                    except Exception as e:
+                        print(f"Failed to cache SQL result: {e}")
+                
+                return res
         except Exception as query_error:
             import traceback
             traceback.print_exc()

@@ -32,6 +32,7 @@ async def insight_miner_node(state: AgentState, config: dict = None) -> dict:
     """
     主动洞察挖掘节点。
     在 SQL 执行成功后，针对复杂查询 (deep mode) 运行。
+    **增强**: 如果发现有价值的洞察，生成一条带有高亮标记的 AIMessage。
     """
     print("DEBUG: Entering insight_miner_node")
     
@@ -71,11 +72,15 @@ async def insight_miner_node(state: AgentState, config: dict = None) -> dict:
         print(f"DEBUG: InsightMiner found {len(response.insights)} insights: {response.insights}")
         
         if response.insights:
-            # 生成一条 AIMessage 通知用户
-            # 但为了不打断主流程的可视化展示，我们这里只更新 State，
-            # 让前端通过 'insight_mined' 事件来独立展示，或者由 Supervisor 决定是否发消息。
-            # 这里我们选择只更新 State，把展示权交给前端事件流。
-            return {"insights": response.insights}
+            # 格式化洞察文本
+            insight_text = "\n".join([f"💡 **洞察 {i+1}**: {insight}" for i, insight in enumerate(response.insights)])
+            
+            # 只有在非常确定时才作为消息发送，避免打扰。
+            # 这里我们作为一条补充消息发送。
+            return {
+                "insights": response.insights,
+                "messages": [AIMessage(content=f"在分析数据时，我发现了一些有趣的现象：\n\n{insight_text}")]
+            }
             
         return {"insights": []}
 

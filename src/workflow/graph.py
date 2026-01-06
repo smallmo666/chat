@@ -101,18 +101,20 @@ def create_graph():
     workflow.add_edge(START, "CacheCheck")
     
     # CacheCheck 条件边
+    def cache_check_router(state):
+        if state.get("next") == "ExecuteSQL":
+            return ["Supervisor"]
+        else:
+            return ["DataDetective", "KnowledgeRetrieval"]
+
     workflow.add_conditional_edges(
         "CacheCheck",
-        lambda x: x.get("next", "DataDetective"), # 默认修改为去 DataDetective (原为 Planner)
-        {
-            "ExecuteSQL": "Supervisor", # 如果缓存命中，直接去 Supervisor (跳过 Detective/Planner)
-            "DataDetective": "DataDetective",
-            "Planner": "Planner" # 保留向后兼容
-        }
+        cache_check_router,
+        ["Supervisor", "DataDetective", "KnowledgeRetrieval"]
     )
     
-    # DataDetective -> KnowledgeRetrieval (Insert Knowledge Step)
-    workflow.add_edge("DataDetective", "KnowledgeRetrieval")
+    # DataDetective -> Planner
+    workflow.add_edge("DataDetective", "Planner")
 
     # KnowledgeRetrieval -> Planner
     workflow.add_edge("KnowledgeRetrieval", "Planner")
@@ -181,26 +183,43 @@ def create_graph():
 
     # Initialize Checkpointer
     # Use custom MySQLSaver to persist state to remote DB
-    # This prevents the graph from restarting from the beginning when resuming from an interrupt
+    # Use SQLAlchemy Pool for thread safety
+    from sqlalchemy import create_engine
     
     # Parse DB URL from settings
-    db_url = make_url(settings.APP_DB_URL)
+    db_url = settings.APP_DB_URL
     
-    # Connect to MySQL
-    # Note: In production, consider using a connection pool or managing connection lifecycle better
-    conn = pymysql.connect(
-        host=db_url.host,
-        port=db_url.port or 3306,
-        user=db_url.username,
-        password=db_url.password,
-        database=db_url.database,
-        autocommit=True
+    # Create SQLAlchemy Engine with Pool
+    # We use pymysql driver directly in connection string
+    # Replace 'mysql+pymysql' with 'mysql+pymysql' (already correct)
+    
+    engine = create_engine(
+        db_url,
+        pool_size=5,
+        max_overflow=10,
+        pool_recycle=3600,
+        pool_pre_ping=True
     )
     
-    checkpointer = MySQLSaver(conn)
-    print(f"Graph: 使用 MySQLSaver ({db_url.host}/{db_url.database}) 进行状态管理")
+    # MySQLSaver expects a raw pymysql connection or similar interface
+    # But for thread safety with LangGraph, we should ideally pass a pool-aware object.
+    # However, MySQLSaver implementation likely takes a single connection object.
+    # If MySQLSaver doesn't support pool, we might need to modify it or use a connection factory.
+    # Let's check MySQLSaver. For now, we can pass the engine and let MySQLSaver use engine.connect()
+    # BUT, the original code passed a raw 'conn'.
+    # If we pass a raw conn, it's shared and unsafe.
+    
+    # Let's use a lambda or factory if MySQLSaver supports it, OR update MySQLSaver to accept an engine.
+    # Assuming we need to fix this in graph.py without changing MySQLSaver too much (unless needed).
+    # The standard LangGraph Checkpointer usually manages its own connection or takes a pool.
+    # Our custom MySQLSaver likely takes a 'conn'.
+    
+    # Better approach: Pass the engine to MySQLSaver, and let it manage connections per call.
+    # We will need to update MySQLSaver to accept 'engine' instead of 'conn'.
+    
+    checkpointer = MySQLSaver(engine) 
+    print(f"Graph: 使用 MySQLSaver (Pool) 进行状态管理")
 
     return workflow.compile(
         checkpointer=checkpointer,
-        # interrupt_before=["ExecuteSQL"] # 暂时禁用人工审批，以解决执行等待问题
     )

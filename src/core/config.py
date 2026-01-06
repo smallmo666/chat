@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: list[str] = Field(default=["*"], env="CORS_ORIGINS")
+
+    # Redis
+    REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     
     class Config:
         env_file = ".env"

@@ -102,6 +102,7 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
         "数据样本 (JSON):\n{data_sample}\n\n"
         "任务要求：\n"
         "1. **图表类型**：请严格采纳专家的建议类型 ({recommended_chart})。如果是 'none' 或 'table'，则生成表格。\n"
+        "   - 如果是 **combination**：通常使用柱状图 (Bar) 展示绝对值（如金额、人数），折线图 (Line) 展示比率（如增长率、占比）。请配置双 Y 轴 (yAxisIndex: 1)。\n"
         "2. **Dataset 模式**：\n"
         "   - **必须**使用 ECharts 的 `dataset` 属性来管理数据。\n"
         "   - 不要将数据硬编码在 `series.data` 中。\n"

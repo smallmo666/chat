@@ -164,10 +164,37 @@ render(AnalysisReport);
 请生成代码。记得调用 `render`。
 """
 
+EDIT_CHART_PROMPT = """
+你是一个精通 ECharts 和 React 的前端工程师。
+用户希望修改现有的图表配置。请根据用户的自然语言指令，生成一个新的 ECharts `option` 对象。
+
+### 输入信息:
+1. **用户指令**: {query}
+2. **当前图表配置 (Option)**: 
+```json
+{current_option}
+```
+
+### 任务要求:
+1. 这是一个**修改**任务，请保留原配置中未被修改的部分（如数据 data），只根据指令调整样式、类型、颜色、标题等。
+2. 输出必须是一个合法的 JSON 对象，可以被 `JSON.parse` 解析。
+3. **不要**输出任何 Markdown 标记、代码块或解释性文字。只输出纯 JSON 字符串。
+
+### 示例:
+输入: "把颜色改成红色"
+输出:
+{
+  "title": { "text": "Sales" },
+  "xAxis": { ... },
+  "series": [{ "type": "bar", "data": [...], "itemStyle": { "color": "red" } }]
+}
+"""
+
 async def ui_artist_node(state: AgentState, config: dict = None) -> dict:
     """
     UI Artist 节点 (Enhanced)。
     生成支持数据驱动和多模态展示的 React 组件。
+    **新增**: 支持交互式图表编辑 (Edit Chart)。
     """
     print("DEBUG: Entering ui_artist_node")
     
@@ -181,6 +208,37 @@ async def ui_artist_node(state: AgentState, config: dict = None) -> dict:
             query = msg.content
             break
             
+    # Check for "edit_chart" intent in state (passed from Supervisor or Frontend)
+    # 这里的逻辑是：如果 frontend 直接发起了 edit 请求，state 中会有 current_option
+    current_option = state.get("current_option")
+    
+    if current_option:
+        print("DEBUG: Handling Chart Edit Request...")
+        prompt = ChatPromptTemplate.from_template(EDIT_CHART_PROMPT)
+        chain = prompt | llm
+        try:
+            response = await chain.ainvoke({
+                "query": query,
+                "current_option": json.dumps(current_option, ensure_ascii=False)
+            })
+            new_option_str = response.content.strip()
+            # Clean up
+            if "```" in new_option_str:
+                new_option_str = new_option_str.split("```")[1]
+                if new_option_str.startswith("json"):
+                    new_option_str = new_option_str[4:]
+            
+            new_option = json.loads(new_option_str.strip())
+            
+            # Return special signal for frontend to update chart only
+            return {
+                "messages": [AIMessage(content="图表已更新。", vizOption=new_option)],
+                "vizOption": new_option # Update state
+            }
+        except Exception as e:
+            print(f"Chart Edit failed: {e}")
+            return {"messages": [AIMessage(content=f"修改图表失败: {e}")]}
+
     # 从 State 获取数据
     python_code = state.get("python_code", "")
     analysis_text = state.get("analysis", "") # PythonAnalysis 的文本结果

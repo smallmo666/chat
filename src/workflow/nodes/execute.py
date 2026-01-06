@@ -125,6 +125,14 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
             "results": "错误: 未生成 SQL。"
         }
 
+    # 内存保护: 强制添加 LIMIT
+    # 如果用户明确要求全量 (e.g. "导出所有数据"), 可以通过 LLM 或 DSL 标记跳过此步骤
+    # 这里简单地检查 SQL 是否已有 LIMIT，如果没有且不是聚合查询 (COUNT/SUM)，则添加 LIMIT 1000
+    if "limit" not in sql.lower() and "count(" not in sql.lower():
+        # 简单追加。注意：如果 SQL 结尾有分号，需要处理
+        sql = sql.strip().rstrip(';') + " LIMIT 1000"
+        print(f"DEBUG: Auto-added LIMIT clause: {sql}")
+
     # 安全检查
     if not is_safe_sql(sql):
         error_msg = f"安全警告: SQL 包含禁止的关键字或复杂的嵌套语句。执行被阻止。\nSQL: {sql}"

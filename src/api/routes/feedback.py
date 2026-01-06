@@ -77,9 +77,12 @@ async def submit_feedback(request: FeedbackRequest):
             print(f"Feedback: Negative for {request.session_id}.")
             
             # A. 从 Semantic Cache 移除 (防止错误缓存)
-            # 目前 Semantic Cache 接口可能不支持精确删除，或者我们需要实现它。
-            # 暂时跳过，或者假设 Cache 有 TTL。
-            # TODO: Implement semantic_cache.remove(user_query)
+            if user_query:
+                try:
+                    semantic_cache.delete(user_query)
+                    print(f"Feedback: Removed potential bad cache for query: {user_query}")
+                except Exception as e:
+                    print(f"Failed to remove from Semantic Cache: {e}")
             
             # B. 处理 Correction (修正)
             if request.correction:

@@ -7,8 +7,17 @@ from src.workflow.graph import create_graph
 
 # Setup Phoenix Tracing
 # This will instrument all LangChain runs within this process
-# tracer_provider = register()
-# LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
+try:
+    from phoenix.otel import register
+    from openinference.instrumentation.langchain import LangChainInstrumentor
+    
+    tracer_provider = register(project_name="smallmo-chat")
+    LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
+    print("Phoenix Tracing Enabled.")
+except ImportError:
+    print("Phoenix dependencies not found. Tracing disabled.")
+except Exception as e:
+    print(f"Failed to initialize Phoenix tracing: {e}")
 
 from src.api.routes import datasource, project, audit, chat, llm, auth, feedback # Added feedback
 

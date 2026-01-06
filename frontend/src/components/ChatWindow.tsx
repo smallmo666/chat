@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined, PartitionOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined, PartitionOutlined, BulbOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor from '@monaco-editor/react';
@@ -13,6 +13,375 @@ import TaskTimeline from './TaskTimeline';
 import { useTheme } from '../context/ThemeContext';
 
 const { TextArea } = Input;
+
+// --- Memoized Components ---
+
+// 1. Memoized Markdown Content
+const MemoizedMarkdown = memo(({ content, isDarkMode }: { content: string, isDarkMode: boolean }) => (
+    <div className="markdown-body" style={{fontSize: 15, lineHeight: 1.6, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+        <ReactMarkdown 
+            remarkPlugins={[remarkGfm]}
+            components={{
+                code({node, inline, className, children, ...props}: any) {
+                    return !inline ? (
+                        <div style={{background: isDarkMode ? '#141414' : '#f6f8fa', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: '8px 0', border: isDarkMode ? '1px solid #303030' : '1px solid #e1e4e8'}}>
+                            <code className={className} {...props} style={{fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: '85%', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+                                {children}
+                            </code>
+                        </div>
+                    ) : (
+                        <code className={className} {...props} style={{background: isDarkMode ? 'rgba(110, 118, 129, 0.4)' : 'rgba(175, 184, 193, 0.2)', padding: '0.2em 0.4em', borderRadius: '6px', fontSize: '85%', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+                            {children}
+                        </code>
+                    )
+                },
+                table({children, ...props}: any) {
+                    return <div style={{overflowX: 'auto', margin: '12px 0'}}><table {...props} style={{borderCollapse: 'collapse', width: '100%', fontSize: 14}}>{children}</table></div>
+                },
+                th({children, ...props}: any) {
+                    return <th {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', background: isDarkMode ? '#1f1f1f' : '#f6f8fa', fontWeight: 600, textAlign: 'left', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</th>
+                },
+                td({children, ...props}: any) {
+                    return <td {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</td>
+                },
+                p({children, ...props}: any) {
+                    return <div {...props} style={{marginBottom: 16, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</div>
+                },
+                li({children, ...props}: any) {
+                    return <li {...props} style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</li>
+                }
+            }}
+        >
+            {content}
+        </ReactMarkdown>
+    </div>
+), (prev, next) => prev.content === next.content && prev.isDarkMode === next.isDarkMode);
+
+// 2. Memoized Message Item
+const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, onSendMessage, setReviewSql, setEditableSql, setIsReviewOpen, setViewingPlan, setIsPlanModalOpen, handleFeedback, setEditablePythonCode, setPythonExecResult, setIsPythonEditOpen, latestData }: any) => {
+
+    // Helper to render content (moved inside or passed as prop, here copied for simplicity but using MemoizedMarkdown)
+    const renderContent = (content: string | any, role: string) => {
+        // ... (Logic for JSON cards remains same, can be refactored further)
+        // For brevity, we focus on the Markdown part optimization
+        
+        // Try to parse JSON for interactive cards
+        if (role === 'agent' && typeof content === 'string' && (content.trim().startsWith('{') || content.trim().startsWith('```json'))) {
+             try {
+                let jsonStr = content.trim();
+                if (jsonStr.startsWith('```json')) {
+                    jsonStr = jsonStr.replace(/^```json/, '').replace(/```$/, '');
+                } else if (jsonStr.startsWith('```')) {
+                    jsonStr = jsonStr.replace(/^```/, '').replace(/```$/, '');
+                }
+                const data = JSON.parse(jsonStr);
+                // Clarify Intent Card
+                if (data.status === 'AMBIGUOUS' && data.options && Array.isArray(data.options)) {
+                    return (
+                        <Card 
+                            size="small" 
+                            title={<Space><CheckCircleOutlined style={{color: '#1677ff'}} /> 需要确认</Space>}
+                            style={{ borderColor: '#e6f4ff', background: isDarkMode ? '#1f1f1f' : '#f0f5ff', minWidth: 300 }}
+                            styles={{ body: { padding: '12px 16px' } }}
+                        >
+                            <Typography.Paragraph strong style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{data.question}</Typography.Paragraph>
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                                {data.options.map((opt: string, idx: number) => (
+                                    <Button 
+                                        key={idx} 
+                                        block 
+                                        style={{ textAlign: 'left' }}
+                                        onClick={() => onSendMessage(opt, "start")}
+                                    >
+                                        {opt}
+                                    </Button>
+                                ))}
+                            </Space>
+                        </Card>
+                    );
+                }
+             } catch (e) { }
+        }
+
+        // Handle Code Generated Event
+        if (role === 'agent' && typeof content === 'string' && content.startsWith('__CODE_GENERATED__')) {
+             const code = content.replace('__CODE_GENERATED__', '');
+             return (
+                 <Card 
+                    size="small" 
+                    title={<Space><CodeOutlined style={{color: '#1677ff'}} /> Python 分析代码</Space>}
+                    extra={
+                        <Button 
+                            type="link" 
+                            size="small" 
+                            icon={<EditOutlined />} 
+                            onClick={() => {
+                                setEditablePythonCode(code);
+                                setPythonExecResult(null);
+                                setIsPythonEditOpen(true);
+                            }}
+                        >
+                            编辑 & 运行
+                        </Button>
+                    }
+                    style={{ 
+                        borderColor: isDarkMode ? '#303030' : '#e6f4ff', 
+                        background: isDarkMode ? '#141414' : '#f0f5ff',
+                        marginBottom: 12
+                    }}
+                    styles={{ body: { padding: 0 } }}
+                 >
+                     <div style={{ maxHeight: 200, overflow: 'auto', padding: '8px 12px' }}>
+                        <pre style={{ margin: 0, fontSize: 12, fontFamily: 'monospace', color: isDarkMode ? '#aaa' : '#666' }}>
+                            {code}
+                        </pre>
+                     </div>
+                 </Card>
+             );
+        }
+
+        if (typeof content === 'string') {
+             return <MemoizedMarkdown content={content} isDarkMode={isDarkMode} />;
+        }
+        
+        return <div style={{minHeight: role === 'agent' ? 24 : 'auto', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{content}</div>;
+    };
+
+    return (
+        <div style={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            alignItems: item.role === 'user' ? 'flex-end' : 'flex-start'
+        }}>
+            <div style={{ 
+                display: 'flex', 
+                flexDirection: item.role === 'user' ? 'row-reverse' : 'row',
+                gap: 16,
+                maxWidth: '92%'
+            }}>
+                {/* Avatar */}
+                <div style={{ 
+                    width: 36, 
+                    height: 36, 
+                    borderRadius: '10px', 
+                    background: item.role === 'user' ? '#333' : '#fff',
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    marginTop: 0,
+                    border: item.role === 'agent' ? '1px solid #f0f0f0' : 'none',
+                    boxShadow: item.role === 'agent' ? '0 2px 6px rgba(0,0,0,0.02)' : '0 2px 6px rgba(0,0,0,0.1)'
+                }}>
+                    {item.role === 'user' ? 
+                        <UserOutlined style={{ color: '#fff', fontSize: 16 }} /> : 
+                        <RobotOutlined style={{ color: '#1677ff', fontSize: 20 }} />
+                    }
+                </div>
+
+                {/* Bubble */}
+                <div style={{ 
+                    padding: '12px 16px', 
+                    borderRadius: item.role === 'user' ? '16px 0 16px 16px' : '0 16px 16px 16px',
+                    background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : (isDarkMode ? '#1f1f1f' : '#fff'),
+                    color: item.role === 'user' ? 'white' : (isDarkMode ? '#e0e0e0' : '#1f1f1f'),
+                    boxShadow: item.role === 'user' ? '0 4px 12px rgba(20, 136, 204, 0.2)' : '0 2px 8px rgba(0,0,0,0.04)',
+                    border: item.role === 'agent' ? (isDarkMode ? '1px solid #303030' : '1px solid rgba(0,0,0,0.04)') : 'none',
+                    fontSize: '15px',
+                    lineHeight: 1.5,
+                    overflow: 'hidden',
+                    minWidth: 60
+                }}>
+                    {/* Thinking Process */}
+                    {item.role === 'agent' && item.thinking && (
+                        <Collapse 
+                            size="small"
+                            ghost
+                            defaultActiveKey={isLoading && isLastMessage ? ['1'] : []}
+                            expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: 10, color: '#999' }} />}
+                            items={[{ 
+                                key: '1', 
+                                label: <Space size={4}><span style={{fontSize: 12, color: '#888', fontWeight: 500}}>思考过程</span>{isLoading && isLastMessage && <LoadingOutlined style={{fontSize: 10, color: '#1677ff'}} />}</Space>, 
+                                children: (
+                                    <div style={{
+                                        whiteSpace: 'pre-wrap', 
+                                        fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', 
+                                        fontSize: 12, 
+                                        color: isDarkMode ? '#aaa' : '#666', 
+                                        background: isDarkMode ? '#141414' : '#f9fafb', 
+                                        padding: '12px', 
+                                        borderRadius: 8, 
+                                        maxHeight: 300, 
+                                        overflowY: 'auto', 
+                                        border: isDarkMode ? '1px solid #303030' : '1px solid #eee'
+                                    }}>
+                                        {item.thinking}
+                                        {isLoading && isLastMessage && <span style={{animation: 'blink 1s step-end infinite', marginLeft: 2, fontWeight: 'bold'}}>▋</span>}
+                                    </div>
+                                )
+                            }]}
+                            style={{ marginBottom: 12, background: 'transparent' }}
+                        />
+                    )}
+
+                    {/* Result Content */}
+                    {item.interrupt ? (
+                        <Card 
+                            size="small" 
+                            title={<Space><CheckCircleOutlined style={{color: '#faad14'}} /> 需要审核 SQL</Space>}
+                            style={{ borderColor: '#faad14', background: '#fffbe6', marginTop: 8 }}
+                            styles={{ body: { padding: '8px 12px' } }}
+                            extra={<Button type="primary" size="small" onClick={() => {
+                                setReviewSql(item.content);
+                                setEditableSql(item.content);
+                                setIsReviewOpen(true);
+                            }}>审核</Button>}
+                        >
+                            <Typography.Text>AI 生成了 SQL 语句，请在执行前进行审核。</Typography.Text>
+                        </Card>
+                    ) : (
+                        item.content && renderContent(item.content, item.role)
+                    )}
+
+                    {/* Generative UI Component */}
+                    {item.uiComponent && (
+                        <ArtifactRenderer 
+                            code={item.uiComponent} 
+                            data={item.data || latestData}
+                            images={item.images} 
+                        />
+                    )}
+
+                    {/* Insights Component */}
+                    {item.role === 'agent' && item.insights && item.insights.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                            <Card
+                                size="small"
+                                title={<Space><BulbOutlined style={{ color: '#faad14' }} /> 智能洞察</Space>}
+                                style={{ 
+                                    background: isDarkMode ? '#2b2111' : '#fff7e6', 
+                                    borderColor: isDarkMode ? '#443b24' : '#ffd591' 
+                                }}
+                                styles={{ 
+                                    body: { padding: '12px 16px' },
+                                    header: { borderBottom: `1px solid ${isDarkMode ? '#443b24' : '#ffd591'}` }
+                                }}
+                            >
+                                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                                    {item.insights.map((insight: string, idx: number) => (
+                                        <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                            <div style={{ 
+                                                minWidth: 18, 
+                                                height: 18, 
+                                                borderRadius: '50%', 
+                                                background: '#faad14', 
+                                                color: '#fff', 
+                                                fontSize: 12, 
+                                                display: 'flex', 
+                                                alignItems: 'center', 
+                                                justifyContent: 'center',
+                                                marginTop: 2
+                                            }}>
+                                                {idx + 1}
+                                            </div>
+                                            <div style={{ color: isDarkMode ? '#e0e0e0' : '#595959', fontSize: 14 }}>
+                                                {insight}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </Space>
+                            </Card>
+                        </div>
+                    )}
+                    
+                    {/* Loading State for empty content */}
+                    {!item.content && !item.thinking && item.role === 'agent' && (
+                            <div style={{ display: 'flex', alignItems: 'center', color: '#1677ff', gap: 10, padding: '4px 0' }}>
+                                <div style={{ width: 8, height: 8, background: '#1677ff', borderRadius: '50%', animation: 'pulse 1s infinite' }}></div>
+                                <span style={{ fontSize: 14, fontWeight: 500 }}>正在分析...</span>
+                            </div>
+                    )}
+
+                    {/* Feedback Buttons */}
+                    {item.role === 'agent' && item.content && (
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                            <Space size="small">
+                                {item.plan && (
+                                    <Tooltip title="查看执行计划">
+                                        <Button 
+                                            type="text" 
+                                            size="small" 
+                                            icon={<PartitionOutlined />} 
+                                            style={{ color: '#aaa', fontSize: 14 }}
+                                            onClick={() => {
+                                                setViewingPlan(item.plan || null);
+                                                setIsPlanModalOpen(true);
+                                            }}
+                                        >
+                                            计划
+                                        </Button>
+                                    </Tooltip>
+                                )}
+                                <Tooltip title="有帮助">
+                                    <Button 
+                                        type="text" 
+                                        size="small" 
+                                        icon={<LikeOutlined />} 
+                                        style={{ color: '#aaa', fontSize: 14 }}
+                                        onClick={() => handleFeedback(index, 'like')}
+                                    />
+                                </Tooltip>
+                                <Tooltip title="没帮助">
+                                    <Button 
+                                        type="text" 
+                                        size="small" 
+                                        icon={<DislikeOutlined />} 
+                                        style={{ color: '#aaa', fontSize: 14 }}
+                                        onClick={() => handleFeedback(index, 'dislike')}
+                                    />
+                                </Tooltip>
+                                {item.vizOption && (
+                                    <Tooltip title="收藏到看板">
+                                        <Button 
+                                            type="text" 
+                                            size="small" 
+                                            icon={<PushpinOutlined />} 
+                                            style={{ color: '#aaa', fontSize: 14 }}
+                                            onClick={() => {
+                                                const saved = localStorage.getItem('pinned_charts') || '[]';
+                                                const charts = JSON.parse(saved);
+                                                charts.push({
+                                                    id: Date.now().toString(),
+                                                    title: 'Chart ' + new Date().toLocaleTimeString(),
+                                                    option: item.vizOption,
+                                                    timestamp: Date.now()
+                                                });
+                                                localStorage.setItem('pinned_charts', JSON.stringify(charts));
+                                                message.success("已收藏");
+                                            }}
+                                        />
+                                    </Tooltip>
+                                )}
+                            </Space>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}, (prev, next) => {
+    // Custom equality check for performance
+    // Re-render if:
+    // 1. Message content changed (e.g. streaming update)
+    // 2. Is loading state changed AND this is the last message
+    // 3. Dark mode changed
+    if (prev.isDarkMode !== next.isDarkMode) return false;
+    if (prev.item !== next.item) return false; // Reference check usually enough for immutable updates
+    if (prev.isLastMessage !== next.isLastMessage) return false;
+    if (prev.isLastMessage && prev.isLoading !== next.isLoading) return false;
+    
+    return true; 
+});
 
 interface ChatWindowProps {
     messages: Message[];
@@ -497,184 +866,25 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     </div>
                 )}
                 {messages.map((item, index) => (
-                    <div key={index} style={{ 
-                        display: 'flex', 
-                        flexDirection: 'column',
-                        alignItems: item.role === 'user' ? 'flex-end' : 'flex-start'
-                    }}>
-                        <div style={{ 
-                            display: 'flex', 
-                            flexDirection: item.role === 'user' ? 'row-reverse' : 'row',
-                            gap: 16,
-                            maxWidth: '92%'
-                        }}>
-                            {/* Avatar */}
-                            <div style={{ 
-                                width: 36, 
-                                height: 36, 
-                                borderRadius: '10px', 
-                                background: item.role === 'user' ? '#333' : '#fff',
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                marginTop: 0,
-                                border: item.role === 'agent' ? '1px solid #f0f0f0' : 'none',
-                                boxShadow: item.role === 'agent' ? '0 2px 6px rgba(0,0,0,0.02)' : '0 2px 6px rgba(0,0,0,0.1)'
-                            }}>
-                                {item.role === 'user' ? 
-                                    <UserOutlined style={{ color: '#fff', fontSize: 16 }} /> : 
-                                    <RobotOutlined style={{ color: '#1677ff', fontSize: 20 }} />
-                                }
-                            </div>
-
-                            {/* Bubble */}
-                            <div style={{ 
-                                padding: '12px 16px', 
-                                borderRadius: item.role === 'user' ? '16px 0 16px 16px' : '0 16px 16px 16px',
-                                background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : (isDarkMode ? '#1f1f1f' : '#fff'),
-                                color: item.role === 'user' ? 'white' : (isDarkMode ? '#e0e0e0' : '#1f1f1f'),
-                                boxShadow: item.role === 'user' ? '0 4px 12px rgba(20, 136, 204, 0.2)' : '0 2px 8px rgba(0,0,0,0.04)',
-                                border: item.role === 'agent' ? (isDarkMode ? '1px solid #303030' : '1px solid rgba(0,0,0,0.04)') : 'none',
-                                fontSize: '15px',
-                                lineHeight: 1.5,
-                                overflow: 'hidden',
-                                minWidth: 60
-                            }}>
-                                {/* Thinking Process */}
-                                {item.role === 'agent' && item.thinking && (
-                                    <Collapse 
-                                        size="small"
-                                        ghost
-                                        defaultActiveKey={isLoading && index === messages.length - 1 ? ['1'] : []}
-                                        expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: 10, color: '#999' }} />}
-                                        items={[{ 
-                                            key: '1', 
-                                            label: <Space size={4}><span style={{fontSize: 12, color: '#888', fontWeight: 500}}>思考过程</span>{isLoading && index === messages.length - 1 && <LoadingOutlined style={{fontSize: 10, color: '#1677ff'}} />}</Space>, 
-                                            children: (
-                                                <div style={{
-                                                    whiteSpace: 'pre-wrap', 
-                                                    fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', 
-                                                    fontSize: 12, 
-                                                    color: isDarkMode ? '#aaa' : '#666', 
-                                                    background: isDarkMode ? '#141414' : '#f9fafb', 
-                                                    padding: '12px', 
-                                                    borderRadius: 8, 
-                                                    maxHeight: 300, 
-                                                    overflowY: 'auto', 
-                                                    border: isDarkMode ? '1px solid #303030' : '1px solid #eee'
-                                                }}>
-                                                    {item.thinking}
-                                                    {isLoading && index === messages.length - 1 && <span style={{animation: 'blink 1s step-end infinite', marginLeft: 2, fontWeight: 'bold'}}>▋</span>}
-                                                </div>
-                                            )
-                                        }]}
-                                        style={{ marginBottom: 12, background: 'transparent' }}
-                                    />
-                                )}
-
-                                {/* Result Content */}
-                                {item.interrupt ? (
-                                    <Card 
-                                        size="small" 
-                                        title={<Space><CheckCircleOutlined style={{color: '#faad14'}} /> 需要审核 SQL</Space>}
-                                        style={{ borderColor: '#faad14', background: '#fffbe6', marginTop: 8 }}
-                                        styles={{ body: { padding: '8px 12px' } }}
-                                        extra={<Button type="primary" size="small" onClick={() => {
-                                            setReviewSql(item.content);
-                                            setEditableSql(item.content);
-                                            setIsReviewOpen(true);
-                                        }}>审核</Button>}
-                                    >
-                                        <Typography.Text>AI 生成了 SQL 语句，请在执行前进行审核。</Typography.Text>
-                                    </Card>
-                                ) : (
-                                    item.content && renderContent(item.content, item.role, (opt) => onSendMessage(opt, "start"))
-                                )}
-
-                                {/* Generative UI Component */}
-                                {item.uiComponent && (
-                                    <ArtifactRenderer 
-                                        code={item.uiComponent} 
-                                        data={item.data || latestData}
-                                        images={item.images} // Pass images to renderer
-                                    />
-                                )}
-                                
-                                {/* Loading State for empty content */}
-                                {!item.content && !item.thinking && item.role === 'agent' && (
-                                        <div style={{ display: 'flex', alignItems: 'center', color: '#1677ff', gap: 10, padding: '4px 0' }}>
-                                            <div style={{ width: 8, height: 8, background: '#1677ff', borderRadius: '50%', animation: 'pulse 1s infinite' }}></div>
-                                            <span style={{ fontSize: 14, fontWeight: 500 }}>正在分析...</span>
-                                        </div>
-                                )}
-
-                                {/* Feedback Buttons */}
-                                {item.role === 'agent' && item.content && (
-                                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                                        <Space size="small">
-                                            {item.plan && (
-                                                <Tooltip title="查看执行计划">
-                                                    <Button 
-                                                        type="text" 
-                                                        size="small" 
-                                                        icon={<PartitionOutlined />} 
-                                                        style={{ color: '#aaa', fontSize: 14 }}
-                                                        onClick={() => {
-                                                            setViewingPlan(item.plan || null);
-                                                            setIsPlanModalOpen(true);
-                                                        }}
-                                                    >
-                                                        计划
-                                                    </Button>
-                                                </Tooltip>
-                                            )}
-                                            <Tooltip title="有帮助">
-                                                <Button 
-                                                    type="text" 
-                                                    size="small" 
-                                                    icon={<LikeOutlined />} 
-                                                    style={{ color: '#aaa', fontSize: 14 }}
-                                                    onClick={() => handleFeedback(index, 'like')}
-                                                />
-                                            </Tooltip>
-                                            <Tooltip title="没帮助">
-                                                <Button 
-                                                    type="text" 
-                                                    size="small" 
-                                                    icon={<DislikeOutlined />} 
-                                                    style={{ color: '#aaa', fontSize: 14 }}
-                                                    onClick={() => handleFeedback(index, 'dislike')}
-                                                />
-                                            </Tooltip>
-                                            {item.vizOption && (
-                                                <Tooltip title="收藏到看板">
-                                                    <Button 
-                                                        type="text" 
-                                                        size="small" 
-                                                        icon={<PushpinOutlined />} 
-                                                        style={{ color: '#aaa', fontSize: 14 }}
-                                                        onClick={() => {
-                                                            const saved = localStorage.getItem('pinned_charts') || '[]';
-                                                            const charts = JSON.parse(saved);
-                                                            charts.push({
-                                                                id: Date.now().toString(),
-                                                                title: 'Chart ' + new Date().toLocaleTimeString(),
-                                                                option: item.vizOption,
-                                                                timestamp: Date.now()
-                                                            });
-                                                            localStorage.setItem('pinned_charts', JSON.stringify(charts));
-                                                            message.success("已收藏");
-                                                        }}
-                                                    />
-                                                </Tooltip>
-                                            )}
-                                        </Space>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+                    <MessageItem 
+                        key={index}
+                        item={item}
+                        index={index}
+                        isDarkMode={isDarkMode}
+                        isLoading={isLoading}
+                        isLastMessage={index === messages.length - 1}
+                        onSendMessage={onSendMessage}
+                        setReviewSql={setReviewSql}
+                        setEditableSql={setEditableSql}
+                        setIsReviewOpen={setIsReviewOpen}
+                        setViewingPlan={setViewingPlan}
+                        setIsPlanModalOpen={setIsPlanModalOpen}
+                        handleFeedback={handleFeedback}
+                        setEditablePythonCode={setEditablePythonCode}
+                        setPythonExecResult={setPythonExecResult}
+                        setIsPythonEditOpen={setIsPythonEditOpen}
+                        latestData={latestData}
+                    />
                 ))}
                 </div>
                 <div ref={messagesEndRef} />

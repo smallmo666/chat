@@ -43,7 +43,8 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
             # 移动到线程内以避免初始化阻塞
             searcher = get_schema_searcher(project_id)
             # 检索 Top-5 表，让 LLM 知道数据库里大概有什么
-            return searcher.search(last_msg, top_k=5)
+            # 使用混合检索 (Hybrid Search)
+            return searcher.search_relevant_tables(last_msg, limit=5)
         except Exception as e:
             print(f"Clarify: Failed to retrieve schema: {e}")
             return None

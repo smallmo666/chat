@@ -1,18 +1,19 @@
 import pickle
 from typing import Any, Dict, Optional, Iterator, AsyncIterator, List, Tuple
-import pymysql.cursors
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointMetadata, CheckpointTuple
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy.engine import Engine
+from sqlalchemy import text
 
 class MySQLSaver(BaseCheckpointSaver):
-    def __init__(self, conn: pymysql.connections.Connection):
+    def __init__(self, engine: Engine):
         super().__init__()
-        self.conn = conn
+        self.engine = engine
         self._init_table()
 
     def _init_table(self):
-        with self.conn.cursor() as cursor:
-            cursor.execute(
+        with self.engine.connect() as conn:
+            conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS checkpoints_v2 (
                     thread_id VARCHAR(191) NOT NULL,
@@ -25,23 +26,19 @@ class MySQLSaver(BaseCheckpointSaver):
                     INDEX idx_created_at (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """
-            )
-        self.conn.commit()
+            ))
+            conn.commit()
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         thread_id = config["configurable"]["thread_id"]
         thread_ts = config["configurable"].get("thread_ts")
         
-        # Ping to keep connection alive
-        self.conn.ping(reconnect=True)
-
-        with self.conn.cursor() as cursor:
+        with self.engine.connect() as conn:
             if thread_ts:
-                cursor.execute(
-                    "SELECT checkpoint, metadata, parent_ts FROM checkpoints_v2 WHERE thread_id = %s AND thread_ts = %s",
-                    (thread_id, thread_ts),
-                )
-                row = cursor.fetchone()
+                result = conn.execute(text(
+                    "SELECT checkpoint, metadata, parent_ts FROM checkpoints_v2 WHERE thread_id = :thread_id AND thread_ts = :thread_ts"
+                ), {"thread_id": thread_id, "thread_ts": thread_ts})
+                row = result.fetchone()
                 if row:
                     checkpoint_blob, metadata_blob, parent_ts = row
                     return CheckpointTuple(
@@ -52,11 +49,10 @@ class MySQLSaver(BaseCheckpointSaver):
                     )
             else:
                 # Use created_at for sorting instead of thread_ts
-                cursor.execute(
-                    "SELECT checkpoint, metadata, parent_ts, thread_ts FROM checkpoints_v2 WHERE thread_id = %s ORDER BY created_at DESC LIMIT 1",
-                    (thread_id,),
-                )
-                row = cursor.fetchone()
+                result = conn.execute(text(
+                    "SELECT checkpoint, metadata, parent_ts, thread_ts FROM checkpoints_v2 WHERE thread_id = :thread_id ORDER BY created_at DESC LIMIT 1"
+                ), {"thread_id": thread_id})
+                row = result.fetchone()
                 if row:
                     checkpoint_blob, metadata_blob, parent_ts, thread_ts = row
                     return CheckpointTuple(
@@ -77,22 +73,19 @@ class MySQLSaver(BaseCheckpointSaver):
     ) -> Iterator[CheckpointTuple]:
         # Minimal implementation
         query = "SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata FROM checkpoints_v2"
-        params = []
+        params = {}
         if config:
-            query += " WHERE thread_id = %s"
-            params.append(config["configurable"]["thread_id"])
+            query += " WHERE thread_id = :thread_id"
+            params["thread_id"] = config["configurable"]["thread_id"]
         
         # Use created_at for sorting
         query += " ORDER BY created_at DESC"
         if limit:
             query += f" LIMIT {limit}"
         
-        # Ping to keep connection alive
-        self.conn.ping(reconnect=True)
-            
-        with self.conn.cursor() as cursor:
-            cursor.execute(query, tuple(params))
-            for row in cursor.fetchall():
+        with self.engine.connect() as conn:
+            result = conn.execute(text(query), params)
+            for row in result.fetchall():
                 thread_id, thread_ts, parent_ts, checkpoint_blob, metadata_blob = row
                 yield CheckpointTuple(
                     config={"configurable": {"thread_id": thread_id, "thread_ts": thread_ts}},
@@ -112,29 +105,25 @@ class MySQLSaver(BaseCheckpointSaver):
         thread_ts = checkpoint["id"]
         parent_ts = config["configurable"].get("thread_ts")
         
-        # Ping to keep connection alive
-        self.conn.ping(reconnect=True)
-
-        with self.conn.cursor() as cursor:
-            cursor.execute(
+        with self.engine.connect() as conn:
+            conn.execute(text(
                 """
                 INSERT INTO checkpoints_v2 (thread_id, thread_ts, parent_ts, checkpoint, metadata) 
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (:thread_id, :thread_ts, :parent_ts, :checkpoint, :metadata)
                 ON DUPLICATE KEY UPDATE 
                     checkpoint=VALUES(checkpoint), 
                     metadata=VALUES(metadata), 
                     parent_ts=VALUES(parent_ts),
                     created_at=CURRENT_TIMESTAMP
-                """,
-                (
-                    thread_id,
-                    thread_ts,
-                    parent_ts,
-                    pickle.dumps(checkpoint),
-                    pickle.dumps(metadata),
-                ),
-            )
-        self.conn.commit()
+                """
+            ), {
+                "thread_id": thread_id,
+                "thread_ts": thread_ts,
+                "parent_ts": parent_ts,
+                "checkpoint": pickle.dumps(checkpoint),
+                "metadata": pickle.dumps(metadata)
+            })
+            conn.commit()
         
         return {
             "configurable": {
@@ -142,6 +131,7 @@ class MySQLSaver(BaseCheckpointSaver):
                 "thread_ts": thread_ts,
             }
         }
+
     
     # Async fallbacks
     async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:

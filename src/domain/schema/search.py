@@ -4,13 +4,14 @@ import hashlib
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from rank_bm25 import BM25Okapi
 from src.core.database import get_query_db
 from src.core.config import settings
 
 class SchemaSearcher:
     """
     Schema 搜索器。
-    使用 FAISS 向量数据库和 OpenAI Embeddings 来搜索相关的表结构。
+    使用 FAISS 向量数据库和 BM25 关键词检索进行混合搜索。
     支持自动检测 Schema 变更并刷新索引。
     """
     def __init__(self, project_id: int = None):
@@ -18,6 +19,8 @@ class SchemaSearcher:
         self.adjacency_list = {} # 表邻接图 {table_name: [neighbor_table_names]}
         self.all_table_metadata = {} # 缓存所有表的元数据 {table_name: info_dict}
         self.vectorstore = None
+        self.bm25 = None # BM25 对象
+        self.documents_cache = [] # 缓存 Document 对象用于 BM25
         self.last_checksum = None # Schema 指纹
         self.lock = threading.Lock()
         
@@ -44,7 +47,7 @@ class SchemaSearcher:
 
     def index_schema(self, force: bool = False):
         """
-        从数据库 Schema 构建 FAISS 索引。
+        从数据库 Schema 构建 FAISS 索引和 BM25 索引。
         
         Args:
             force (bool): 是否强制重建索引。如果为 False，则只在 Checksum 变化时重建。
@@ -69,6 +72,8 @@ class SchemaSearcher:
                 self.adjacency_list = {} # Reset graph
                 
                 documents = []
+                tokenized_corpus = [] # For BM25
+                
                 for table_name, info in schema_dict.items():
                     # 初始化邻接列表
                     if table_name not in self.adjacency_list:
@@ -89,7 +94,13 @@ class SchemaSearcher:
                                 self.adjacency_list[ref_table] = set()
                             self.adjacency_list[ref_table].add(table_name)
                     
+                    # Content for Vector Search (Semantic)
                     content = f"Table: {table_name}\nComment: {info.get('comment', '')}\nColumns: {columns_str}{relationships_str}"
+                    
+                    # Content for BM25 (Keyword heavy)
+                    # Include table name multiple times to boost weight
+                    bm25_content = f"{table_name} {table_name} {table_name} {info.get('comment', '')} {columns_str}"
+                    tokenized_corpus.append(bm25_content.lower().split())
                     
                     doc = Document(
                         page_content=content,
@@ -99,10 +110,12 @@ class SchemaSearcher:
 
                 if not documents:
                     self.vectorstore = None
+                    self.bm25 = None
+                    self.documents_cache = []
                     return
                 
+                # 1. Build Vector Store
                 print(f"DEBUG: SchemaSearcher using Embedding Model: {settings.EMBEDDING_MODEL}")
-
                 embeddings = OpenAIEmbeddings(
                     model=settings.EMBEDDING_MODEL, 
                     openai_api_key=settings.OPENAI_API_KEY,
@@ -111,8 +124,13 @@ class SchemaSearcher:
                     chunk_size=10
                 )
                 self.vectorstore = FAISS.from_documents(documents, embeddings)
+                
+                # 2. Build BM25 Index
+                self.bm25 = BM25Okapi(tokenized_corpus)
+                self.documents_cache = documents
+                
                 self.last_checksum = current_checksum
-                print("DEBUG: Schema index rebuild completed.")
+                print("DEBUG: Schema index rebuild completed (Vector + BM25).")
                 
             except Exception as e:
                 print(f"ERROR: Failed to index schema: {e}")
@@ -120,86 +138,72 @@ class SchemaSearcher:
     def search_candidate_tables(self, query: str, limit: int = 5) -> list[dict]:
         """
         根据查询返回候选表列表（结构化数据）。
-        步骤：
-        1. 向量检索 + 关键词重排序获取 Top-K。
-        2. 图谱扩展：将 Top-K 的 1-hop 邻居加入候选集。
-        
-        返回: [{"table_name": "...", "comment": "...", "full_info": {...}}, ...]
+        采用混合检索策略 (Hybrid Search): Vector (Semantic) + BM25 (Keyword) + RRF Fusion
         """
-        if not self.vectorstore:
+        if not self.vectorstore or not self.bm25:
             return []
             
-        # 1. 初始检索 (Recall)
-        # 获取 Top-K * 2 以确保覆盖率
-        semantic_docs = self.vectorstore.similarity_search(query, k=limit * 2)
+        # 1. 向量检索 (Vector Recall)
+        vector_limit = limit * 2
+        vector_results = self.vectorstore.similarity_search_with_score(query, k=vector_limit)
+        # normalize vector scores (L2 distance, lower is better. Convert to similarity 0-1 if possible, or just rank)
+        # Here we just use rank for RRF
         
-        # 关键词加权重排序 (简化版复用逻辑)
-        query_tokens = set(query.lower().split())
-        scored_results = {}
-        for i, doc in enumerate(semantic_docs):
-            score = 1.0 / (i + 1)
+        # 2. BM25 检索 (Keyword Recall)
+        tokenized_query = query.lower().split()
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+        # Get top indices
+        top_n = min(len(bm25_scores), limit * 2)
+        # argsort returns indices of sorted array. We want descending.
+        bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:top_n]
+        
+        # 3. RRF Fusion (Reciprocal Rank Fusion)
+        # RRF_score = 1 / (k + rank)
+        k = 60
+        rrf_scores = {} # {table_name: score}
+        
+        # Process Vector Results
+        for rank, (doc, score) in enumerate(vector_results):
             table_name = doc.metadata["table_name"]
-            scored_results[table_name] = score
+            rrf_scores[table_name] = rrf_scores.get(table_name, 0) + (1 / (k + rank + 1))
             
-            if table_name.lower() in query.lower():
-                scored_results[table_name] += 2.0
+        # Process BM25 Results
+        for rank, idx in enumerate(bm25_indices):
+            doc = self.documents_cache[idx]
+            table_name = doc.metadata["table_name"]
+            rrf_scores[table_name] = rrf_scores.get(table_name, 0) + (1 / (k + rank + 1))
             
-            info = json.loads(doc.metadata["full_info"])
-            for col in info['columns']:
-                if col['name'].lower() in query_tokens:
-                     scored_results[table_name] += 0.5
-
-        sorted_tables = sorted(scored_results.items(), key=lambda x: x[1], reverse=True)
+        # Sort by RRF score
+        sorted_tables = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         top_table_names = [t[0] for t in sorted_tables[:limit]]
         
-        # 收集 Top-K 的文档
-        candidate_docs_map = {doc.metadata["table_name"]: doc for doc in semantic_docs if doc.metadata["table_name"] in top_table_names}
+        print(f"DEBUG: Hybrid Search Top Tables: {top_table_names}")
         
-        # 2. 图谱扩展 (Graph Expansion)
+        # 4. 图谱扩展 (Graph Expansion)
         expanded_names = set(top_table_names)
         for name in top_table_names:
             neighbors = self.adjacency_list.get(name, set())
             for neighbor in neighbors:
                 if neighbor not in expanded_names:
                     expanded_names.add(neighbor)
-                    print(f"DEBUG: Graph Expansion added neighbor: {neighbor} (via {name})")
+                    # print(f"DEBUG: Graph Expansion added neighbor: {neighbor} (via {name})")
         
-        # 3. 构造最终结果列表
-        # 注意：这里有个问题，semantic_docs 可能不包含邻居表（因为它们向量相似度低）。
-        # 如果我们想返回邻居表的元数据，我们需要能访问所有表的元数据。
-        # 由于我们没有全局存储所有 doc，我们只能尽可能返回已有的，或者我们需要在 init 时保存全量 metadata。
-        # 方案：在 init 时保存 self.all_table_metadata = {name: full_info}
-        
-        # 既然我们现在不能修改 init 太大，我们尝试从 docstore 恢复（如果有的话），或者只返回表名让上层去 fetch。
-        # 为了稳妥，我们在 init 里加个 self.all_table_metadata 吧。
-        # 这里先假设我们有 self.all_table_metadata (稍后在 init 添加)
-        
+        # 5. 构造结果
         results = []
         for name in expanded_names:
-            if hasattr(self, 'all_table_metadata') and name in self.all_table_metadata:
+            if name in self.all_table_metadata:
                 info = self.all_table_metadata[name]
                 results.append({
                     "table_name": name,
                     "comment": info.get("comment", ""),
                     "full_info": info
                 })
-            elif name in candidate_docs_map:
-                # Fallback to doc metadata if available
-                doc = candidate_docs_map[name]
-                info = json.loads(doc.metadata["full_info"])
-                results.append({
-                    "table_name": name,
-                    "comment": info.get("comment", ""),
-                    "full_info": info
-                })
             else:
-                # 最后的 Fallback: 只有名字，没有 info。上层可能需要 inspect
-                # 但如果我们修改了 init，这里就不应该发生。
-                # 暂时返回仅名字
+                # Should not happen if sync is correct
                 results.append({
                     "table_name": name,
-                    "comment": "Metadata missing in cache",
-                    "full_info": {"columns": []} # Empty stub
+                    "comment": "",
+                    "full_info": {"columns": []}
                 })
         
         return results

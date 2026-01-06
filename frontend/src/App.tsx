@@ -1,16 +1,18 @@
-import React from 'react';
-import { ConfigProvider, theme, App as AntdApp } from 'antd';
+import React, { lazy, Suspense } from 'react';
+import { ConfigProvider, theme, App as AntdApp, Spin } from 'antd';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import AppLayout from './components/Layout';
-import DataSourcePage from './pages/DataSourcePage';
-import ProjectPage from './pages/ProjectPage';
-import ChatPage from './pages/ChatPage';
-import AuditPage from './pages/AuditPage';
-import LoginPage from './pages/LoginPage';
-import SettingsPage from './pages/SettingsPage';
-import KnowledgePage from './pages/KnowledgePage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+
+// Lazy Load Pages
+const DataSourcePage = lazy(() => import('./pages/DataSourcePage'));
+const ProjectPage = lazy(() => import('./pages/ProjectPage'));
+const ChatPage = lazy(() => import('./pages/ChatPage'));
+const AuditPage = lazy(() => import('./pages/AuditPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
 
 // Protected Route Component
 const ProtectedRoute = () => {
@@ -21,23 +23,31 @@ const ProtectedRoute = () => {
   return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
+const LoadingFallback = () => (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', width: '100%' }}>
+        <Spin size="large" tip="Loading..." fullscreen />
+    </div>
+);
+
 const AppRoutes = () => {
     return (
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          
-          <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<AppLayout />}>
-                <Route index element={<Navigate to="/projects" replace />} />
-                <Route path="datasources" element={<DataSourcePage />} />
-                <Route path="projects" element={<ProjectPage />} />
-                <Route path="chat/:projectId" element={<ChatPage />} />
-                <Route path="audit" element={<AuditPage />} />
-                <Route path="knowledge" element={<KnowledgePage />} />
-                <Route path="settings" element={<SettingsPage />} />
+        <Suspense fallback={<LoadingFallback />}>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              
+              <Route element={<ProtectedRoute />}>
+                  <Route path="/" element={<AppLayout />}>
+                    <Route index element={<Navigate to="/projects" replace />} />
+                    <Route path="datasources" element={<DataSourcePage />} />
+                    <Route path="projects" element={<ProjectPage />} />
+                    <Route path="chat/:projectId" element={<ChatPage />} />
+                    <Route path="audit" element={<AuditPage />} />
+                    <Route path="knowledge" element={<KnowledgePage />} />
+                    <Route path="settings" element={<SettingsPage />} />
+                  </Route>
               </Route>
-          </Route>
-        </Routes>
+            </Routes>
+        </Suspense>
     )
 }
 

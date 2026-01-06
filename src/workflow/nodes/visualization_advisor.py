@@ -30,15 +30,16 @@ VIZ_ADVISOR_PROMPT = """
 ### 推荐原则:
 1. **趋势分析** (关键词: 趋势, 变化, 走势): 优先 **Line Chart**。通常 X 轴为时间。
 2. **比较分析** (关键词: 对比, 排名, Top): 优先 **Bar Chart**。
-3. **占比分析** (关键词: 占比, 分布, 构成): 如果类别少 (<8)，用 **Pie Chart**；否则用 Bar Chart。
-4. **关系分析**: 两个数值列的相关性用 **Scatter Chart**。
-5. **明细查询**: 如果用户想看详细信息，推荐 **Table**。
-
-### 输出要求:
-请输出严格的 JSON 格式，必须包含以下字段（键名必须是英文）:
-- "chart_type": string (bar, line, pie, scatter, table, map)
-- "x_axis": string (X轴字段名)
-- "y_axis": list[string] (Y轴字段名列表)
+3.33→3. **占比分析** (关键词: 占比, 分布, 构成): 如果类别少 (<8)，用 **Pie Chart**；否则用 Bar Chart。
+34→4. **关系分析**: 两个数值列的相关性用 **Scatter Chart**。
+35→5. **明细查询**: 如果用户想看详细信息，推荐 **Table**。
+36→6. **双轴/组合图** (关键词: 效能, 比率, 趋势+总量): 当需要同时展示两个量级差异巨大的指标（如“销售额”和“毛利率”，或“UV”和“转化率”）时，推荐 **Combination Chart**。
+37→
+38→### 输出要求:
+39→请输出严格的 JSON 格式，必须包含以下字段（键名必须是英文）:
+40→- "chart_type": string (bar, line, pie, scatter, table, map, combination)
+41→- "x_axis": string (X轴字段名)
+42→- "y_axis": list[string] (Y轴字段名列表)
 - "title": string (图表标题)
 - "reason": string (推荐理由)
 
