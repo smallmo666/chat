@@ -100,9 +100,14 @@ async def startup_event():
                         if not projects:
                             print("Background schema indexing skipped: no projects found.")
                             return
-                        for p in projects:
-                            searcher = get_schema_searcher(p.id)
-                            await asyncio.to_thread(searcher.index_schema, True)
+                        # Controlled concurrency pool
+                        sem = asyncio.Semaphore(6)
+                        async def _run_index(pid: int):
+                            async with sem:
+                                searcher = get_schema_searcher(pid)
+                                await asyncio.to_thread(searcher.index_schema, False)
+                        tasks = [asyncio.create_task(_run_index(p.id)) for p in projects]
+                        await asyncio.gather(*tasks)
                         print(f"Background schema indexing completed for {len(projects)} project(s).")
                 except Exception as e:
                     print(f"Background schema indexing failed: {e}")

@@ -44,6 +44,8 @@ class SchemaSearcher:
             for col in sorted_cols:
                 canonical_str += f"{col['name']}:{col['type']}|"
         
+        if not canonical_str:
+            return None
         return hashlib.md5(canonical_str.encode('utf-8')).hexdigest()
 
     def index_schema(self, force: bool = False):
@@ -56,14 +58,21 @@ class SchemaSearcher:
         with self.lock:
             try:
                 db = get_query_db(self.project_id)
-                # 获取最新 Schema
-                schema_json = db.inspect_schema()
+                schema_json = db.inspect_schema(project_id=self.project_id)
                 schema_dict = json.loads(schema_json)
                 
                 # 检查变更
                 current_checksum = self._calculate_checksum(schema_dict)
                 import time as _time
                 now = int(_time.time())
+                if current_checksum is None:
+                    self.vectorstore = None
+                    self.bm25 = None
+                    self.documents_cache = []
+                    self.last_checksum = None
+                    self._last_index_time = now
+                    print("DEBUG: Empty schema, skipping index rebuild.")
+                    return
                 if not force:
                     if current_checksum == self.last_checksum and self.vectorstore is not None:
                         print("DEBUG: Schema unchanged, skipping index rebuild.")

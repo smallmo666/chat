@@ -10,7 +10,7 @@ import re
 import sqlglot
 from src.core.models import DataSource, Project
 from src.core.config import settings
-from src.core.redis_client import get_redis_client
+from src.core.redis_client import get_redis_client, get_sync_redis_client
 from src.core.metrics import QueryMetrics
 import time
 
@@ -126,7 +126,7 @@ class QueryDatabase:
         finally:
             engine.dispose()
 
-    def inspect_schema(self, scope_config: dict = None, project_id: int = None) -> str:
+    def inspect_schema(self, scope_config: dict = None, project_id: int = None, refresh: bool = False) -> str:
         """
         检查表结构。
         使用临时同步连接，因为 SQLAlchemy Inspector 目前主要支持同步 API。
@@ -137,16 +137,17 @@ class QueryDatabase:
         redis_client = None
         if project_id:
             try:
-                redis_client = get_redis_client()
+                redis_client = get_sync_redis_client()
                 # Create a unique hash for the scope config
                 scope_str = json.dumps(scope_config, sort_keys=True) if scope_config else "full"
                 scope_hash = hashlib.md5(scope_str.encode()).hexdigest()
                 cache_key = f"t2s:v1:schema:{project_id}:{scope_hash}"
                 
-                cached_schema = redis_client.get(cache_key)
-                if cached_schema:
-                    print(f"QueryDB: Schema cache hit for {cache_key}")
-                    return cached_schema
+                if not refresh:
+                    cached_schema = redis_client.get(cache_key)
+                    if cached_schema:
+                        print(f"QueryDB: Schema cache hit for {cache_key}")
+                        return cached_schema
             except Exception as e:
                 print(f"Redis cache error: {e}")
 
@@ -186,48 +187,118 @@ class QueryDatabase:
 
         # 遍历每个数据库并获取表结构
         from sqlalchemy import create_engine
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        for db_name in target_dbs:
+        # Attempt shard merge when overall cache miss and not refresh
+        # Shard key per database
+        def _shard_key(db: str) -> str:
+            if not project_id:
+                return None
+            return f"t2s:v1:schema_shard:{project_id}:{scope_hash}:{db}"
+        
+        # First pass: try to load shards
+        if project_id and not refresh:
+            for db_name in list(target_dbs):
+                try:
+                    sk = _shard_key(db_name)
+                    if sk:
+                        shard_json = redis_client.get(sk)
+                        if shard_json:
+                            try:
+                                shard_data = json.loads(shard_json)
+                                for full_table_name, info in shard_data.items():
+                                    if target_tables and full_table_name not in target_tables:
+                                        continue
+                                    schema_info[full_table_name] = info
+                                # Remove db from scanning list if shard existed
+                                target_dbs.remove(db_name)
+                            except Exception as _:
+                                pass
+                except Exception as _:
+                    pass
+        
+        def _scan_db(db_name: str) -> dict:
             try:
-                # 动态构建连接字符串
                 if self.type == "postgresql":
-                    # 使用 psycopg2 进行同步连接，确保 client_encoding=utf8
-                    # 关键修改：默认不指定 dbname 连接到 postgres 库，以便跨库查询
-                    # 但 inspect 通常需要连接到具体库。如果 target_dbs 包含多个库，我们需要循环连接。
-                    # 这里 logic 是：外层 loop 遍历 db_name，所以这里连接到 db_name 是对的。
                     db_connection_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{db_name}?client_encoding=utf8"
                 else:
-                    db_connection_str = self._sync_conn_str # MySQL 通常只有一个 DB 上下文
-                    
+                    db_connection_str = self._sync_conn_str
                 db_engine = create_engine(db_connection_str)
                 inspector = inspect(db_engine)
-                
-                # 假设每个数据库主要使用 public schema
                 tables = inspector.get_table_names(schema='public')
-                
+                db_partial = {}
                 for table_name in tables:
                     full_table_name = f"{db_name}.{table_name}"
-                    
                     if target_tables and full_table_name not in target_tables:
                         continue
-                    
                     columns = inspector.get_columns(table_name, schema='public')
-                    
                     try:
                         table_comment = inspector.get_table_comment(table_name, schema='public')
                         comment_text = table_comment.get('text', '') if table_comment else ""
                     except:
                         comment_text = ""
-                        
-                    schema_info[full_table_name] = {
+                    # PK / FK / Index enrichment (best-effort)
+                    primary_key = []
+                    foreign_keys = []
+                    indexes = []
+                    try:
+                        pkc = inspector.get_pk_constraint(table_name, schema='public')
+                        if pkc and pkc.get('constrained_columns'):
+                            primary_key = pkc.get('constrained_columns') or []
+                    except:
+                        primary_key = []
+                    try:
+                        fks = inspector.get_foreign_keys(table_name, schema='public')
+                        for fk in fks or []:
+                            foreign_keys.append({
+                                "constrained_columns": fk.get("constrained_columns", []),
+                                "referred_table": fk.get("referred_table", ""),
+                                "referred_columns": fk.get("referred_columns", [])
+                            })
+                    except:
+                        foreign_keys = []
+                    try:
+                        idxs = inspector.get_indexes(table_name, schema='public')
+                        for ix in idxs or []:
+                            indexes.append({
+                                "name": ix.get("name", ""),
+                                "column_names": ix.get("column_names", []),
+                                "unique": bool(ix.get("unique", False))
+                            })
+                    except:
+                        indexes = []
+                    info_obj = {
                         "columns": [{"name": col["name"], "type": str(col["type"]), "comment": col.get("comment", "")} for col in columns],
-                        "comment": comment_text
+                        "comment": comment_text,
+                        "primary_key": primary_key,
+                        "foreign_keys": foreign_keys,
+                        "indexes": indexes
                     }
-                
+                    db_partial[full_table_name] = info_obj
                 db_engine.dispose()
-                
+                # Persist shard
+                try:
+                    if project_id:
+                        sk = _shard_key(db_name)
+                        if sk:
+                            redis_client.setex(sk, settings.REDIS_SCHEMA_TTL, json.dumps(db_partial, ensure_ascii=False))
+                except Exception:
+                    pass
+                return db_partial
             except Exception as e:
                 print(f"检查数据库 {db_name} 时出错: {e}")
+                return {}
+        
+        if target_dbs:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                future_map = {executor.submit(_scan_db, db): db for db in target_dbs}
+                for fut in as_completed(future_map):
+                    try:
+                        part = fut.result() or {}
+                        for k, v in part.items():
+                            schema_info[k] = v
+                    except Exception:
+                        pass
             
         result_json = json.dumps(schema_info, ensure_ascii=False)
         
@@ -271,11 +342,63 @@ class QueryDatabase:
             target_engine = self.async_engine
             qm = QueryMetrics()
             t0 = time.time()
+            
+            # Precheck column existence (best-effort) for single-table queries
+            def _precheck_columns(ast, routed_db: str) -> str | None:
+                try:
+                    # Collect table names
+                    tables = []
+                    for t in ast.find_all(sqlglot.exp.Table):
+                        name = getattr(t, "name", None)
+                        if name:
+                            tables.append(name)
+                    # Only handle single table precheck
+                    if len(tables) != 1 or not project_id or not routed_db:
+                        return None
+                    table_name = tables[0]
+                    full_table = f"{routed_db}.{table_name}"
+                    # Load schema from Redis (prefer shard)
+                    r = get_sync_redis_client()
+                    scope_hash = "full"
+                    shard_key = f"t2s:v1:schema_shard:{project_id}:{scope_hash}:{routed_db}"
+                    table_map = {}
+                    try:
+                        shard_json = r.get(shard_key)
+                        if shard_json:
+                            table_map = json.loads(shard_json)
+                        else:
+                            overall_key = f"t2s:v1:schema:{project_id}:{scope_hash}"
+                            ov = r.get(overall_key)
+                            if ov:
+                                table_map = json.loads(ov)
+                    except Exception as _:
+                        pass
+                    if full_table not in table_map:
+                        return None
+                    cols = table_map[full_table].get("columns", [])
+                    colset = {c.get("name", "").lower() for c in cols}
+                    # Collect referenced columns
+                    refcols = set()
+                    for c in ast.find_all(sqlglot.exp.Column):
+                        nm = getattr(c, "name", None)
+                        if nm:
+                            refcols.add(str(nm).lower())
+                    # If CAST/EXTRACT patterns captured as identifiers, include them via Identifier nodes
+                    for idn in ast.find_all(sqlglot.exp.Identifier):
+                        val = getattr(idn, "name", None)
+                        if val and re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', str(val)):
+                            refcols.add(str(val).lower())
+                    missing = [rc for rc in refcols if rc and rc not in colset]
+                    if missing:
+                        return f"列不存在: {missing}（表 {full_table}）。可用列: {sorted(list(colset))[:30]}"
+                    return None
+                except Exception as _:
+                    return None
 
             # 仅当存在库/模式前缀时才尝试解析和路由
             has_prefix = bool(re.search(r'(^|[\s"])([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+', query)) or \
                          bool(re.search(r'`[a-zA-Z0-9_]+`\.`[a-zA-Z0-9_]+`', query)) or \
-                         bool(re.search(r'"[a-zA-Z0-9_+]"\."[a-zA-Z0-9_]+"', query))
+                         bool(re.search(r'"[a-zA-Z0-9_+]"\."[a-zA-Z0-9_+]+"', query))
             try:
                 if has_prefix:
                     ast = sqlglot.parse_one(query)
@@ -289,19 +412,28 @@ class QueryDatabase:
                             if candidate_val.lower() != "public":
                                 db_name = candidate_val
                                 break
-                    if db_name:
-                        print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
-                        target_engine = self._get_engine_for_db(db_name)
-                        def strip_db(sql: str, db: str) -> str:
-                            patterns = [
-                                rf'\b{re.escape(db)}\.',          # 无引号 db.
-                                rf'"{re.escape(db)}"\.',           # PostgreSQL "db".
-                                rf'`{re.escape(db)}`\.',           # MySQL `db`.
-                            ]
-                            for p in patterns:
-                                sql = re.sub(p, '', sql)
-                            return sql
-                        modified_query = strip_db(query, db_name)
+                if db_name:
+                    print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
+                    target_engine = self._get_engine_for_db(db_name)
+                    # Precheck columns before modify query
+                    if 'ast' in locals():
+                        precheck_msg = _precheck_columns(ast, db_name)
+                        if precheck_msg:
+                            return {
+                                "markdown": f"SQL 列校验失败: {precheck_msg}",
+                                "json": None,
+                                "error": precheck_msg
+                            }
+                    def strip_db(sql: str, db: str) -> str:
+                        patterns = [
+                            rf'\b{re.escape(db)}\.',          # 无引号 db.
+                            rf'"{re.escape(db)}"\.',           # PostgreSQL "db".
+                            rf'`{re.escape(db)}`\.',           # MySQL `db`.
+                        ]
+                        for p in patterns:
+                            sql = re.sub(p, '', sql)
+                        return sql
+                    modified_query = strip_db(query, db_name)
             except Exception as e:
                 print(f"sqlglot parse failed, fallback to default routing: {e}")
                 if has_prefix:

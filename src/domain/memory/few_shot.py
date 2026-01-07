@@ -5,6 +5,8 @@ from typing import Dict, Any
 
 from src.core.config import settings
 
+_REMOTE_UNAVAILABLE = False
+
 class FewShotRetriever:
     """
     基于 ChromaDB 的 Few-Shot 样本检索器。
@@ -18,7 +20,8 @@ class FewShotRetriever:
 
     def _init_vector_db(self):
         try:
-            if settings.CHROMA_USE_REMOTE:
+            global _REMOTE_UNAVAILABLE
+            if settings.CHROMA_USE_REMOTE and not _REMOTE_UNAVAILABLE:
                 try:
                     print(f"Connecting to remote ChromaDB at {settings.CHROMA_SERVER_HOST}:{settings.CHROMA_SERVER_PORT}...")
                     self._chroma_client = chromadb.HttpClient(
@@ -30,7 +33,11 @@ class FewShotRetriever:
                     print("Successfully connected to remote ChromaDB.")
                 except Exception as e:
                     print(f"Warning: Failed to connect to remote ChromaDB ({e}), falling back to EphemeralClient.")
+                    _REMOTE_UNAVAILABLE = True
                     self._chroma_client = chromadb.EphemeralClient()
+            elif settings.CHROMA_USE_REMOTE and _REMOTE_UNAVAILABLE:
+                # 远端不可用时，直接使用 Ephemeral，避免重复连接与日志噪声
+                self._chroma_client = chromadb.EphemeralClient()
             else:
                 # 尝试使用持久化客户端
                 try:

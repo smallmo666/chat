@@ -5,6 +5,7 @@ from src.core.database import get_query_db
 import asyncio
 import threading
 import re
+from src.core.config import settings
 
 def validate_identifier(name: str):
     """
@@ -31,12 +32,24 @@ class ValueSearcher:
 
     def _init_vector_db(self):
         try:
-            # 优先使用持久化客户端
-            try:
-                self._chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            except Exception as e:
-                print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
-                self._chroma_client = chromadb.EphemeralClient()
+            # 远端优先（HTTP-only）
+            if settings.CHROMA_USE_REMOTE:
+                try:
+                    self._chroma_client = chromadb.HttpClient(
+                        host=settings.CHROMA_SERVER_HOST,
+                        port=settings.CHROMA_SERVER_PORT
+                    )
+                    self._chroma_client.heartbeat()
+                except Exception as e:
+                    print(f"Warning: Remote ChromaDB unavailable ({e}), falling back to EphemeralClient.")
+                    self._chroma_client = chromadb.EphemeralClient()
+            else:
+                # 持久化客户端，不可用则降级内存
+                try:
+                    self._chroma_client = chromadb.PersistentClient(path="./chroma_db")
+                except Exception as e:
+                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
+                    self._chroma_client = chromadb.EphemeralClient()
             collection_name = f"db_values_{self.project_id}" if self.project_id else "db_values_default"
             try:
                 self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
