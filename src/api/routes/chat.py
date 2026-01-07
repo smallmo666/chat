@@ -334,6 +334,8 @@ async def event_generator(
                     )
                     session.add(log_entry)
                     session.commit()
+                # Push a final finish event to ensure UI receives completion
+                await queue.put({"type": "result", "content": "本轮流程已完成"})
             except Exception as e:
                 print(f"Failed to save audit log: {e}")
                     

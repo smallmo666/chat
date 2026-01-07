@@ -156,6 +156,59 @@ def get_tables(request: ProjectTablesRequest, app_db: AppDatabase = Depends(get_
         traceback.print_exc()
         return {"error": str(e)}
 
+class TablesProgressRequest(BaseModel):
+    project_id: int
+    db_prefix: Optional[str] = None
+
+@router.post("/tables/progress")
+def get_tables_progress(request: TablesProgressRequest, app_db: AppDatabase = Depends(get_app_db)):
+    """
+    Return schema indexing progress for project tables.
+    """
+    try:
+        project_id = request.project_id
+        query_db = get_query_db(project_id)
+        with app_db.get_session() as session:
+            project = session.get(Project, project_id)
+            scope = project.scope_config if project else None
+        r = get_sync_redis_client()
+        scope_str = json.dumps(scope, sort_keys=True) if scope else "full"
+        scope_hash = hashlib.md5(scope_str.encode()).hexdigest()
+        completed = set()
+        prefix = f"t2s:v1:schema_shard:{project_id}:{scope_hash}:"
+        try:
+            for k in r.scan_iter(prefix + "*"):
+                key = k if isinstance(k, str) else k.decode()
+                dbn = key.split(":")[-1]
+                completed.add(dbn)
+        except Exception:
+            pass
+        # total dbs
+        total_dbs = 1
+        try:
+            if scope and isinstance(scope, dict) and scope.get("databases"):
+                total_dbs = len(scope.get("databases"))
+            elif query_db.dbname:
+                total_dbs = 1
+            else:
+                total_dbs = len(query_db._get_databases())
+        except Exception:
+            pass
+        # Optional prefix filter for completed set
+        if request.db_prefix:
+            completed = {d for d in completed if d.startswith(request.db_prefix)}
+        return {
+            "progress": {
+                "completed_dbs": len(completed),
+                "total_dbs": total_dbs
+            },
+            "completed_db_names": sorted(list(completed))[:50]
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
 @router.post("/get", response_model=ProjectRead)
 def get_project(request: ProjectIdRequest, app_db: AppDatabase = Depends(get_app_db)):
     with app_db.get_session() as session:
