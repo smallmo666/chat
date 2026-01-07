@@ -12,8 +12,8 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
         # 如果 ClarifyIntent 标记意图不清晰，立即停止流程，等待用户回复
         intent_clear = state.get("intent_clear", True) # 默认为 True
         if intent_clear is False:
-             print("DEBUG: Supervisor - Intent NOT clear. Stopping execution.")
-             return {"next": "FINISH"}
+             print("DEBUG: Supervisor - Intent NOT clear. Routing to SelectTables.")
+             return {"next": "SelectTables", "intent_clear": True}
         # -----------------------
 
         plan = state.get("plan", [])

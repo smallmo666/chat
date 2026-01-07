@@ -11,6 +11,9 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         
         dsl_str = state.get("dsl")
         print(f"DEBUG: dsl_to_sql_node input dsl: {dsl_str}")
+        # 前置拦截：非 JSON 内容（澄清/文本）直接返回意图不清晰
+        if isinstance(dsl_str, str) and not dsl_str.strip().startswith("{"):
+            return {"intent_clear": False}
         
         # 1. 获取数据库类型 (Dialect)
         db_type = "mysql" # 默认
@@ -50,7 +53,8 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                     
         except Exception as e:
             print(f"Error parsing DSL JSON: {e}")
-            raise ValueError(f"Invalid JSON DSL format. Content: {dsl_str[:100]}...")
+            # 友好返回，不抛异常，走澄清路径
+            return {"intent_clear": False}
             
         # 3. 编译 SQL
         compiler = DSLCompiler(dialect=db_type)
@@ -65,6 +69,4 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         
     except Exception as e:
         print(f"ERROR in dsl_to_sql_node: {e}")
-        import traceback
-        traceback.print_exc()
-        raise e
+        return {"intent_clear": False}

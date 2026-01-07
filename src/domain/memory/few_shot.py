@@ -38,10 +38,14 @@ class FewShotRetriever:
                 except Exception as e:
                     print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
                     self._chroma_client = chromadb.EphemeralClient()
-                
+            
             # 每个项目使用独立的 Collection，或者是全局共享的 "common_examples"
             collection_name = f"few_shot_examples_{self.project_id}" if self.project_id else "few_shot_examples_common"
-            self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
+            try:
+                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
+            except Exception:
+                self._chroma_client = chromadb.EphemeralClient()
+                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
             print(f"FewShotRetriever initialized for collection: {collection_name}")
         except Exception as e:
             print(f"Failed to init FewShotRetriever: {e}")

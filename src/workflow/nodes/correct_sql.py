@@ -41,7 +41,9 @@ BASE_SYSTEM_PROMPT = """
 
 请仔细分析错误原因（例如：列名拼写错误、GROUP BY 缺失、类型不匹配等），并利用提供的 Schema 信息找到正确的表名或列名。
 如果错误提示“Column not found”且你在 Schema 中发现了相似的列名，请大胆修正。
-只输出修复后的 SQL，不要输出其他废话。
+请严格以 JSON 对象形式输出，包含以下字段：
+fixed_sql: 修复后的 SQL 查询字符串
+reasoning: 修复思路的简要说明
 """
 
 async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
@@ -218,8 +220,38 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
         }
     except Exception as e:
         print(f"Correction failed: {e}")
-        # 如果修复也失败了，增加计数，让 Supervisor 决定（可能会最终放弃）
-        return {
-            "retry_count": retry_count + 1,
-            "error": f"Auto-correction failed: {e}" 
-        }
+        try:
+            plain_chain = prompt | llm
+            plain_result = await plain_chain.ainvoke({})
+            if isinstance(plain_result, str):
+                fixed_sql = plain_result.strip()
+            elif hasattr(plain_result, "content"):
+                fixed_sql = plain_result.content.strip()
+            else:
+                fixed_sql = str(plain_result).strip()
+            if query_db and query_db.type == "postgresql":
+                fixed_sql = fixed_sql.replace('`', '"')
+            def fix_pg_schema_ref(match):
+                full_ref = match.group(1)
+                if "." in full_ref:
+                    parts = full_ref.replace('"', '').split('.')
+                    if len(parts) == 2:
+                        return f'"{parts[0]}"."{parts[1]}"'
+                return match.group(0)
+            fixed_sql = re.sub(r'"([^"]+\.[^"]+)"', fix_pg_schema_ref, fixed_sql)
+            if not is_safe_sql(fixed_sql):
+                return {
+                    "retry_count": retry_count + 1,
+                    "error": "Auto-corrected SQL was rejected by security policy."
+                }
+            return {
+                "sql": fixed_sql,
+                "error": None,
+                "retry_count": retry_count + 1,
+                "messages": [AIMessage(content="🛠️ 结构化输出失败，已使用回退修复。")]
+            }
+        except Exception as e2:
+            return {
+                "retry_count": retry_count + 1,
+                "error": f"Auto-correction failed: {e}" 
+            }

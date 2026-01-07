@@ -5,6 +5,7 @@ from opentelemetry.metrics import set_meter_provider
 from opentelemetry import metrics
 from src.core.config import settings
 import time
+import socket
 
 _initialized = False
 _meters = {}
@@ -16,10 +17,23 @@ def init_metrics():
     if not getattr(settings, "ENABLE_METRICS", True):
         _initialized = True
         return
-    exporter = OTLPMetricExporter()
-    reader = PeriodicExportingMetricReader(exporter)
-    provider = MeterProvider(metric_readers=[reader])
-    set_meter_provider(provider)
+    reachable = False
+    try:
+        with socket.create_connection(("localhost", 4317), timeout=0.3) as _:
+            reachable = True
+    except Exception:
+        reachable = False
+    try:
+        if reachable:
+            exporter = OTLPMetricExporter()
+            reader = PeriodicExportingMetricReader(exporter)
+            provider = MeterProvider(metric_readers=[reader])
+        else:
+            provider = MeterProvider()
+        set_meter_provider(provider)
+    except Exception:
+        provider = MeterProvider()
+        set_meter_provider(provider)
     _initialized = True
 
 def get_meter(name: str):

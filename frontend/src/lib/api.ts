@@ -53,4 +53,10 @@ export const updateSessionTitle = async (sessionId: string, title: string) => {
     return await api.post('/api/chat/sessions/update', { session_id: sessionId, title });
 };
 
+// Project API
+export const fetchProject = async (id: number) => {
+    const response = await api.post('/api/projects/get', { id });
+    return response.data;
+};
+
 export default api;

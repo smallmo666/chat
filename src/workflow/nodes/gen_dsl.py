@@ -202,7 +202,7 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
             rewritten_query_context=rewritten_query_context,
             error_context=error_context
         )
-        
+        # 尝试结构化输出，失败则回退
         chain = prompt | llm
         
         print("DEBUG: Invoking LLM for DSL generation (Async)...")
@@ -220,6 +220,12 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
             
         if not dsl_str:
              return {"dsl": '{"error": "Empty DSL generated"}'}
+        # 若返回非 JSON（常见澄清文本），则走澄清路径
+        if not dsl_str.strip().startswith("{"):
+            return {
+                "messages": [],
+                "intent_clear": False
+            }
 
         return {"dsl": dsl_str}
         

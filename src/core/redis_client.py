@@ -11,7 +11,7 @@ class RedisClient:
             pool = redis.ConnectionPool.from_url(
                 settings.REDIS_URL,
                 decode_responses=True, # Automatically decode bytes to strings
-                max_connections=10
+                max_connections=20
             )
             cls._instance = redis.Redis(connection_pool=pool)
         return cls._instance

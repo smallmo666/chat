@@ -60,70 +60,53 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
 
         // 3. Build Tree Nodes
         const nodes: TreeDataNode[] = Object.entries(dbGroups).map(([dbName, tables]) => {
-            // If it's the "Default" group and we only have one group, maybe flatten? 
-            // But for consistency, let's keep the structure if there are mixed types.
-            // However, if ALL tables are Default (no prefix), we might want to skip the root level?
-            // Let's stick to strict grouping for now.
-            
             return {
                 title: (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 8 }}>
-                        <Tooltip title={dbName} placement="topLeft" mouseEnterDelay={0.3}>
-                            <span style={{ fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8, fontSize: 13 }}>
-                                {dbName}
-                            </span>
-                        </Tooltip>
+                        <span style={{ fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8, fontSize: 13 }}>
+                            {dbName}
+                        </span>
                         <span style={{ color: '#999', fontSize: 11, flexShrink: 0, background: '#f5f5f5', padding: '0 5px', borderRadius: 8, minWidth: 18, textAlign: 'center' }}>
                             {tables.length}
                         </span>
                     </div>
                 ),
                 key: `db:${dbName}`,
-                icon: <DatabaseOutlined style={{color: '#8c8c8c'}} />,
+                selectable: false,
                 children: tables.map(t => {
-                    // Reconstruct full key for uniqueness: "dbName.tableName"
                     const fullKey = dbName === 'Default' ? t.name : `${dbName}.${t.name}`;
-                    
                     return {
                         title: (
                             <div style={{ display: 'flex', alignItems: 'center', width: '100%', overflow: 'hidden' }}>
-                                <Tooltip title={t.name} placement="topLeft" mouseEnterDelay={0.3}>
-                                    <span style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '75%' }}>
+                                <Tooltip title={t.name} placement="topLeft" mouseEnterDelay={0.5}>
+                                    <span style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '90%' }}>
                                         {t.name}
                                     </span>
                                 </Tooltip>
                                 {t.comment && (
-                                    <Tooltip title={t.comment} placement="topLeft" mouseEnterDelay={0.3}>
-                                        <span style={{ color: '#888', marginLeft: 4, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
-                                            ({t.comment})
-                                        </span>
-                                    </Tooltip>
+                                    <span style={{ color: '#888', marginLeft: 6, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, opacity: 0.7 }}>
+                                        {t.comment}
+                                    </span>
                                 )}
                             </div>
                         ),
                         key: fullKey,
-                        icon: <TableOutlined style={{color: '#1677ff'}} />,
                         children: t.columns.map(col => ({
                             title: (
-                                <div style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#555', overflow: 'hidden', width: '100%' }}>
-                                    <Tooltip title={col.name} placement="topLeft" mouseEnterDelay={0.3}>
-                                        <span style={{ color: '#1677ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '60%', fontSize: 12 }}>
-                                            {col.name}
-                                        </span>
-                                    </Tooltip>
-                                    <span style={{ color: '#999', margin: '0 3px', flexShrink: 0, fontSize: 11 }}>{col.type}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', fontSize: 12, color: '#666', overflow: 'hidden', width: '100%' }}>
+                                    <span style={{ color: '#1677ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '60%' }}>
+                                        {col.name}
+                                    </span>
+                                    <span style={{ color: '#999', margin: '0 4px', flexShrink: 0, fontSize: 11, transform: 'scale(0.9)' }}>{col.type}</span>
                                     {col.comment && (
-                                        <Tooltip title={col.comment} placement="topLeft" mouseEnterDelay={0.3}>
-                                            <span style={{ color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, fontSize: 11 }}>
-                                                - {col.comment}
-                                            </span>
-                                        </Tooltip>
+                                        <span style={{ color: '#999', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, fontSize: 11 }}>
+                                            {col.comment}
+                                        </span>
                                     )}
                                 </div>
                             ),
                             key: `${fullKey}.${col.name}`,
-                            isLeaf: true,
-                            icon: <ColumnHeightOutlined style={{fontSize: 11}} />
+                            isLeaf: true
                         }))
                     };
                 })
@@ -215,7 +198,7 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                             }));
                         }}
                         treeData={treeData}
-                        showIcon
+                        showIcon={false}
                         style={{background: 'transparent', fontSize: 13}}
                         // height={800} // Virtual scroll removed for better auto-sizing
                         checkedKeys={checkedKeys}
@@ -232,13 +215,6 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                             setAutoExpandParent(false);
                         }}
                         autoExpandParent={autoExpandParent}
-                        icon={(props: any) => {
-                            if (props.isLeaf) return <ColumnHeightOutlined style={{fontSize: 11, color: '#8c8c8c'}} />;
-                            if (props.data && props.data.children) return <DatabaseOutlined style={{color: '#8c8c8c'}} />; // Heuristic for DB node
-                            // Actually treeData already has icons, this prop might override them or be fallback.
-                            // DirectoryTree uses node icon if present.
-                            return <TableOutlined style={{color: '#1677ff'}} />;
-                        }}
                     />
                     </div>
                 )}

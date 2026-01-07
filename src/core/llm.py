@@ -26,15 +26,18 @@ def get_llm(node_name: str = None, project_id: int = None) -> BaseChatModel:
         except Exception as e:
             print(f"加载动态 LLM 配置失败: {e}. 回退到默认配置。")
 
-    # 2. 回退到环境变量（系统默认）
+    # 2. 回退到环境变量（系统默认），根据节点名称提供轻量化映射
+    node_model_map = {
+        "Planner": "qwen-flash",
+        "CorrectSQL": "qwen-flash",
+        "SelectTables": "qwen-flash",
+    }
+    model_name = node_model_map.get(node_name, settings.OPENAI_MODEL_NAME)
     return ChatOpenAI(
-        model=settings.OPENAI_MODEL_NAME,
+        model=model_name,
         temperature=0,
         openai_api_key=settings.OPENAI_API_KEY,
-        # settings currently doesn't have OPENAI_API_BASE, adding fallback if not present
-        # but typically this is implied or handled by settings if needed.
-        # Let's check settings definition again. It only had KEY and MODEL_NAME.
-        # Assuming standard OpenAI or that settings will be updated if custom base needed.
+        openai_api_base=settings.OPENAI_API_BASE
     )
 
 def _create_llm_from_config(config: LLMProvider) -> BaseChatModel:

@@ -62,7 +62,17 @@ class DSLCompiler:
                 
                 # 如果指定了表名，加前缀；否则假设唯一或已经在 where 处理
                 # 使用 literal_column 处理 "table.col" 格式最稳妥
-                full_name = f"{t_name}.{c_name}" if t_name else c_name
+                def _normalize_expr(name: str) -> str:
+                    if self.dialect == 'postgresql':
+                        import re
+                        m = re.match(r'\s*EXTRACT\s*\(\s*(YEAR|MONTH)\s+FROM\s+(.+?)\s*\)\s*$', name, re.IGNORECASE)
+                        if m:
+                            unit = m.group(1).upper()
+                            inner = m.group(2).strip()
+                            return f'EXTRACT({unit} FROM CAST({inner} AS DATE))'
+                    return name
+                normalized_name = _normalize_expr(c_name)
+                full_name = f"{t_name}.{normalized_name}" if t_name else normalized_name
                 c_obj = literal_column(full_name)
                 
                 # Aggregation

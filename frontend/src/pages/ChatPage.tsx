@@ -12,7 +12,7 @@ import TaskTimeline from '../components/TaskTimeline';
 import SessionList from '../components/SessionList';
 import type { Message, TaskItem, ChatSession } from '../types';
 import { SchemaProvider, useSchema } from '../context/SchemaContext';
-import { fetchSessions, fetchSessionHistory, deleteSession, updateSessionTitle } from '../lib/api';
+import { fetchSessions, fetchSessionHistory, deleteSession, updateSessionTitle, fetchProject } from '../lib/api';
 
 const { Content } = Layout;
 const { useBreakpoint } = Grid;
@@ -36,6 +36,9 @@ const ChatPageContent: React.FC = () => {
   // Session Management State
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeLeftTab, setActiveLeftTab] = useState('schema');
+  
+  // Project Info
+  const [projectName, setProjectName] = useState<string>('');
   
   // Mobile Drawer States
   const [showSchema, setShowSchema] = useState(false);
@@ -70,6 +73,11 @@ const ChatPageContent: React.FC = () => {
       // If we have a project ID, try to load sessions
       if (projectId) {
           loadSessions();
+          
+          // Load Project Info
+          fetchProject(parseInt(projectId)).then(proj => {
+              setProjectName(proj.name);
+          }).catch(err => console.error("Failed to load project:", err));
       }
 
       if (!tid) {
@@ -736,6 +744,7 @@ const ChatPageContent: React.FC = () => {
                         onSendMessage={handleSendMessage}
                         latestData={latestData}
                         projectId={projectId}
+                        projectName={projectName}
                     />
                  </div>
 
@@ -796,6 +805,7 @@ const ChatPageContent: React.FC = () => {
                     onSendMessage={handleSendMessage}
                     latestData={latestData}
                     projectId={projectId}
+                    projectName={projectName}
                     onToggleSidebar={() => {
                         if (leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)) {
                             setLeftPanelSize('20%');

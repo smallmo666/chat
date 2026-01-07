@@ -23,9 +23,10 @@ class SchemaSearcher:
         self.documents_cache = [] # 缓存 Document 对象用于 BM25
         self.last_checksum = None # Schema 指纹
         self.lock = threading.Lock()
+        self._last_index_time = 0
+        self._min_rebuild_interval = 60
         
-        # 初始化时尝试加载索引
-        self.index_schema(force=True)
+        # 懒加载：首次查询时再触发索引构建
 
     def _calculate_checksum(self, schema_dict: dict) -> str:
         """
@@ -61,9 +62,15 @@ class SchemaSearcher:
                 
                 # 检查变更
                 current_checksum = self._calculate_checksum(schema_dict)
-                if not force and current_checksum == self.last_checksum and self.vectorstore is not None:
-                    print("DEBUG: Schema unchanged, skipping index rebuild.")
-                    return
+                import time as _time
+                now = int(_time.time())
+                if not force:
+                    if current_checksum == self.last_checksum and self.vectorstore is not None:
+                        print("DEBUG: Schema unchanged, skipping index rebuild.")
+                        return
+                    if self._last_index_time and (now - self._last_index_time) < self._min_rebuild_interval:
+                        print("DEBUG: Rebuild throttled, skipping due to interval.")
+                        return
 
                 print(f"DEBUG: Schema change detected (Checksum: {current_checksum}), rebuilding index...")
                 
@@ -130,6 +137,7 @@ class SchemaSearcher:
                 self.documents_cache = documents
                 
                 self.last_checksum = current_checksum
+                self._last_index_time = now
                 print("DEBUG: Schema index rebuild completed (Vector + BM25).")
                 
             except Exception as e:
@@ -141,7 +149,12 @@ class SchemaSearcher:
         采用混合检索策略 (Hybrid Search): Vector (Semantic) + BM25 (Keyword) + RRF Fusion
         """
         if not self.vectorstore or not self.bm25:
-            return []
+            try:
+                self.index_schema(force=False)
+            except Exception as _:
+                return []
+            if not self.vectorstore or not self.bm25:
+                return []
             
         # 1. 向量检索 (Vector Recall)
         vector_limit = limit * 2
@@ -173,6 +186,23 @@ class SchemaSearcher:
             table_name = doc.metadata["table_name"]
             rrf_scores[table_name] = rrf_scores.get(table_name, 0) + (1 / (k + rank + 1))
             
+        # Keyword boosting for commerce domains
+        commerce_tokens = {"sales", "order", "orders", "transaction", "transactions", "amount", "price", "value", "revenue", "gmv"}
+        qt = set(tokenized_query)
+        if qt & commerce_tokens:
+            for doc, _ in vector_results:
+                info = json.loads(doc.metadata["full_info"])
+                table_name = doc.metadata["table_name"].lower()
+                boost = 0
+                if any(tok in table_name for tok in commerce_tokens):
+                    boost += 1.5
+                for col in info.get("columns", []):
+                    cn = col.get("name", "").lower()
+                    if cn in commerce_tokens:
+                        boost += 0.2
+                if boost > 0:
+                    rrf_scores[doc.metadata["table_name"]] = rrf_scores.get(doc.metadata["table_name"], 0) + boost
+        
         # Sort by RRF score
         sorted_tables = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         top_table_names = [t[0] for t in sorted_tables[:limit]]

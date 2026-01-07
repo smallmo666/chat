@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     REDIS_SCHEMA_TTL: int = Field(default=3600, env="REDIS_SCHEMA_TTL")
     REDIS_SQL_TTL: int = Field(default=300, env="REDIS_SQL_TTL")
+    QUERY_CACHE_TTL: int = Field(default=600, env="QUERY_CACHE_TTL")
     
     # ChromaDB (Remote)
     CHROMA_SERVER_HOST: str = Field(default="159.75.148.55", env="CHROMA_SERVER_HOST")
@@ -43,8 +44,10 @@ class Settings(BaseSettings):
     QUERY_POOL_SIZE: int = Field(default=10, env="QUERY_POOL_SIZE")
     QUERY_MAX_OVERFLOW: int = Field(default=20, env="QUERY_MAX_OVERFLOW")
     QUERY_POOL_RECYCLE: int = Field(default=3600, env="QUERY_POOL_RECYCLE")
+    QUERY_POOL_TIMEOUT: int = Field(default=10, env="QUERY_POOL_TIMEOUT")
     ROUTE_POOL_SIZE: int = Field(default=5, env="ROUTE_POOL_SIZE")
     ROUTE_MAX_OVERFLOW: int = Field(default=10, env="ROUTE_MAX_OVERFLOW")
+    ROUTE_POOL_TIMEOUT: int = Field(default=10, env="ROUTE_POOL_TIMEOUT")
     DEFAULT_ROW_LIMIT: int = Field(default=1000, env="DEFAULT_ROW_LIMIT")
     CHECKPOINT_BATCH_SIZE: int = Field(default=10, env="CHECKPOINT_BATCH_SIZE")
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
@@ -53,6 +56,7 @@ class Settings(BaseSettings):
     ENABLE_RATE_LIMIT: bool = Field(default=True, env="ENABLE_RATE_LIMIT")
     RATE_LIMIT_WINDOW: int = Field(default=60, env="RATE_LIMIT_WINDOW")
     RATE_LIMIT_MAX_REQUESTS: int = Field(default=120, env="RATE_LIMIT_MAX_REQUESTS")
+    ENABLE_SCHEMA_BACKGROUND_INDEX: bool = Field(default=True, env="ENABLE_SCHEMA_BACKGROUND_INDEX")
 
     class Config:
         env_file = ".env"

@@ -229,17 +229,19 @@ async def event_generator(
                     elif node_name == "ExecuteSQL":
                         results_json_str = state_update.get("results", "[]")
                         event_data["details"] = "查询成功"
-                        try:
-                            json_data = json.loads(results_json_str)
-                            row_count = len(json_data) if isinstance(json_data, list) else 0
-                            audit_data["result_summary"] = f"Returned {row_count} rows"
-                            if isinstance(json_data, list) and len(json_data) > 0:
-                                await queue.put({"type": "data_export", "content": json_data})
-                            token = state_update.get("download_token")
-                            if token:
-                                await queue.put({"type": "data_download", "content": token})
-                        except Exception as e:
-                            print(f"Failed to parse results JSON for export: {e}")
+                        # 仅当结果看起来是 JSON 数组时再解析导出
+                        if isinstance(results_json_str, str) and results_json_str.strip().startswith("["):
+                            try:
+                                json_data = json.loads(results_json_str)
+                                row_count = len(json_data) if isinstance(json_data, list) else 0
+                                audit_data["result_summary"] = f"Returned {row_count} rows"
+                                if isinstance(json_data, list) and len(json_data) > 0:
+                                    await queue.put({"type": "data_export", "content": json_data})
+                            except Exception as e:
+                                print(f"Failed to parse results JSON for export: {e}")
+                        token = state_update.get("download_token")
+                        if token:
+                            await queue.put({"type": "data_download", "content": token})
 
                         msgs = state_update.get("messages", [])
                         if msgs and isinstance(msgs[-1], AIMessage):

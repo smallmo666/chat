@@ -54,8 +54,8 @@ BASE_SYSTEM_PROMPT = """
 - 如果需要多步验证（例如先查销量，再查库存），请在描述中注明。
 - 优先使用 SQL 解决数据获取问题，使用 PythonAnalysis 解决计算和逻辑问题。
 
-请制定执行计划，包含一系列步骤（node 和 desc），并以 JSON 格式输出。
-注意：输出的 JSON 对象必须包含一个名为 "plan" 的列表字段。
+请制定执行计划，包含一系列步骤（node 和 desc），并以 JSON 格式严格输出。
+输出必须是一个 JSON 对象，且必须包含一个名为 \"plan\" 的列表字段。
 """
 
 REWRITE_SYSTEM_PROMPT = """
@@ -123,12 +123,38 @@ async def planner_node(state: AgentState, config: dict = None) -> dict:
     )
     
     chain = prompt | llm.with_structured_output(PlannerResponse)
-    
-    # 异步调用规划
-    result = await chain.ainvoke({"messages": messages})
-    
-    # 将 Pydantic 模型转换为字典以用于状态
-    plan = [{"node": step.node, "desc": step.desc, "status": "wait"} for step in result.plan]
+    plan = []
+    try:
+        # 异步调用规划（结构化）
+        result = await chain.ainvoke({"messages": messages})
+        plan = [{"node": step.node, "desc": step.desc, "status": "wait"} for step in result.plan]
+    except Exception as e:
+        print(f"DEBUG: Planner structured output failed: {e}")
+        # 回退：非结构化调用，尝试解析 JSON；若失败则提供默认计划
+        try:
+            plain_chain = prompt | llm
+            plain_res = await plain_chain.ainvoke({"messages": messages})
+            content = getattr(plain_res, "content", str(plain_res)).strip()
+            import json, re
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                steps = parsed.get("plan") or parsed.get("steps") or []
+                if isinstance(steps, list) and steps:
+                    for s in steps:
+                        node = s.get("node", "SelectTables")
+                        desc = s.get("desc", "未提供描述")
+                        plan.append({"node": node, "desc": desc, "status": "wait"})
+        except Exception as e2:
+            print(f"DEBUG: Planner fallback parse failed: {e2}")
+        if not plan:
+            plan = [
+                {"node": "ClarifyIntent", "desc": "确认用户意图是否清晰", "status": "wait"},
+                {"node": "SelectTables", "desc": "选择与问题相关的数据表", "status": "wait"},
+                {"node": "GenerateDSL", "desc": "生成中间 DSL 表达查询意图", "status": "wait"},
+                {"node": "DSLtoSQL", "desc": "将 DSL 转换为可执行 SQL", "status": "wait"},
+                {"node": "ExecuteSQL", "desc": "执行 SQL 并返回结果", "status": "wait"},
+            ]
     
     return {
         "plan": plan, 

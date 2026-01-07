@@ -58,7 +58,8 @@ class QueryDatabase:
                 poolclass=AsyncAdaptedQueuePool,
                 pool_size=settings.QUERY_POOL_SIZE,
                 max_overflow=settings.QUERY_MAX_OVERFLOW,
-                pool_recycle=settings.QUERY_POOL_RECYCLE
+                pool_recycle=settings.QUERY_POOL_RECYCLE,
+                pool_timeout=settings.QUERY_POOL_TIMEOUT
             )
             
             # 多数据库支持：缓存不同数据库的 Engine
@@ -96,7 +97,8 @@ class QueryDatabase:
                 poolclass=AsyncAdaptedQueuePool,
                 pool_size=settings.ROUTE_POOL_SIZE,
                 max_overflow=settings.ROUTE_MAX_OVERFLOW,
-                pool_recycle=settings.QUERY_POOL_RECYCLE
+                pool_recycle=settings.QUERY_POOL_RECYCLE,
+                pool_timeout=settings.ROUTE_POOL_TIMEOUT
             )
             self._db_engines[db_name] = engine
             return engine
@@ -270,25 +272,51 @@ class QueryDatabase:
             qm = QueryMetrics()
             t0 = time.time()
 
+            # 仅当存在库/模式前缀时才尝试解析和路由
+            has_prefix = bool(re.search(r'(^|[\s"])([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+', query)) or \
+                         bool(re.search(r'`[a-zA-Z0-9_]+`\.`[a-zA-Z0-9_]+`', query)) or \
+                         bool(re.search(r'"[a-zA-Z0-9_+]"\."[a-zA-Z0-9_]+"', query))
             try:
-                ast = sqlglot.parse_one(query)
+                if has_prefix:
+                    ast = sqlglot.parse_one(query)
                 db_name = None
-                for table in ast.find_all(sqlglot.exp.Table):
-                    qualifiers = table.parts
-                    if len(qualifiers) >= 2:
-                        candidate = qualifiers[-2]
-                        if candidate.lower() != "public":
-                            db_name = candidate
-                            break
-                if db_name:
-                    print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
-                    target_engine = self._get_engine_for_db(db_name)
-                    def strip_db(sql: str, db: str) -> str:
-                        pattern = rf'\b{re.escape(db)}\.'
-                        return re.sub(pattern, '', sql)
-                    modified_query = strip_db(query, db_name)
+                if has_prefix and ast:
+                    for table in ast.find_all(sqlglot.exp.Table):
+                        qualifiers = table.parts
+                        if len(qualifiers) >= 2:
+                            candidate = qualifiers[-2]
+                            candidate_val = getattr(candidate, "name", str(candidate))
+                            if candidate_val.lower() != "public":
+                                db_name = candidate_val
+                                break
+                    if db_name:
+                        print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
+                        target_engine = self._get_engine_for_db(db_name)
+                        def strip_db(sql: str, db: str) -> str:
+                            patterns = [
+                                rf'\b{re.escape(db)}\.',          # 无引号 db.
+                                rf'"{re.escape(db)}"\.',           # PostgreSQL "db".
+                                rf'`{re.escape(db)}`\.',           # MySQL `db`.
+                            ]
+                            for p in patterns:
+                                sql = re.sub(p, '', sql)
+                            return sql
+                        modified_query = strip_db(query, db_name)
             except Exception as e:
                 print(f"sqlglot parse failed, fallback to default routing: {e}")
+                if has_prefix:
+                    # 额外兜底：尝试一次正则提取 db 前缀并剥离
+                    try:
+                        m = re.search(r'\b([a-zA-Z0-9_]+)\.', query)
+                        if m:
+                            candidate_db = m.group(1)
+                            if candidate_db.lower() != "public":
+                                print(f"DEBUG: Fallback strip - candidate db: {candidate_db}")
+                                for p in [rf'\b{re.escape(candidate_db)}\.', rf'"{re.escape(candidate_db)}"\.', rf'`{re.escape(candidate_db)}`\.']:
+                                    query = re.sub(p, '', query)
+                                modified_query = query
+                    except Exception as _:
+                        pass
 
             if "limit" not in modified_query.lower() and "count(" not in modified_query.lower():
                 modified_query = modified_query.strip().rstrip(';') + f" LIMIT {settings.DEFAULT_ROW_LIMIT}"
@@ -317,18 +345,31 @@ class QueryDatabase:
                         "error": None
                     }
                 else:
-                    # 使用 pandas 进行简单的格式化 (在内存中)
-                    df = pd.DataFrame(data)
+                    # 轻量结果整形：组装为简易表格文本，避免 pandas 开销
+                    try:
+                        cols = list(data[0].keys())
+                        header = " | ".join(cols)
+                        sep = " | ".join(["---"] * len(cols))
+                        preview_count = min(len(data), settings.PREVIEW_ROW_COUNT)
+                        lines = []
+                        for i in range(preview_count):
+                            row = data[i]
+                            vals = [str(row.get(c, "")) for c in cols]
+                            lines.append(" | ".join(vals))
+                        markdown = "\n".join([header, sep] + lines)
+                    except Exception as _:
+                        markdown = f"返回 {len(data)} 条记录。"
                     res = {
-                        "markdown": df.to_markdown(index=False),
-                        "json": df.to_json(orient='records', force_ascii=False),
+                        "markdown": markdown,
+                        "json": json.dumps(data, ensure_ascii=False),
                         "error": None
                     }
                 
                 # Save to Cache
                 if cache_key and redis_client:
                     try:
-                        redis_client.setex(cache_key, settings.REDIS_SQL_TTL, json.dumps(res))
+                        ttl = getattr(settings, "QUERY_CACHE_TTL", settings.REDIS_SQL_TTL)
+                        redis_client.setex(cache_key, ttl, json.dumps(res))
                     except Exception as e:
                         print(f"Failed to cache SQL result: {e}")
                 

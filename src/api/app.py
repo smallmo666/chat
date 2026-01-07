@@ -5,6 +5,7 @@ import warnings
 # Must be set before importing matplotlib
 os.environ['MPLCONFIGDIR'] = os.path.join(os.getcwd(), '.matplotlib_cache')
 os.makedirs(os.environ['MPLCONFIGDIR'], exist_ok=True)
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,11 +17,21 @@ from src.workflow.graph import create_graph
 
 try:
     if os.getenv("ENABLE_PHOENIX", "true").lower() == "true":
-        from phoenix.otel import register
-        from openinference.instrumentation.langchain import LangChainInstrumentor
-        tracer_provider = register(project_name="smallmo-chat")
-        LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
-        print("Phoenix Tracing Enabled.")
+        import socket
+        reachable = False
+        try:
+            with socket.create_connection(("localhost", 4317), timeout=0.3) as _:
+                reachable = True
+        except Exception:
+            reachable = False
+        if reachable:
+            from phoenix.otel import register
+            from openinference.instrumentation.langchain import LangChainInstrumentor
+            tracer_provider = register(project_name="smallmo-chat")
+            LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
+            print("Phoenix Tracing Enabled.")
+        else:
+            print("Phoenix Tracing Disabled: OTLP endpoint not reachable.")
     else:
         print("Phoenix Tracing Disabled by ENV.")
 except Exception as e:
@@ -73,6 +84,31 @@ async def startup_event():
         print(f"Graph initialization failed: {e}")
         import traceback
         traceback.print_exc()
+    
+    # Background schema indexing (pre-warm) to avoid blocking first requests
+    try:
+        if settings.ENABLE_SCHEMA_BACKGROUND_INDEX:
+            import asyncio
+            from src.domain.schema.search import get_schema_searcher
+            from src.core.models import Project
+            from sqlmodel import select
+            async def _bg_index():
+                try:
+                    app_db = get_app_db()
+                    with app_db.get_session() as session:
+                        projects = session.exec(select(Project)).all()
+                        if not projects:
+                            print("Background schema indexing skipped: no projects found.")
+                            return
+                        for p in projects:
+                            searcher = get_schema_searcher(p.id)
+                            await asyncio.to_thread(searcher.index_schema, True)
+                        print(f"Background schema indexing completed for {len(projects)} project(s).")
+                except Exception as e:
+                    print(f"Background schema indexing failed: {e}")
+            asyncio.create_task(_bg_index())
+    except Exception as e:
+        print(f"Failed to schedule background indexing: {e}")
 
 if __name__ == "__main__":
     import uvicorn

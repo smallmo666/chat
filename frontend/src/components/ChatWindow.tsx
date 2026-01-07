@@ -11,6 +11,7 @@ import { API_BASE_URL } from '../config';
 import TaskTimeline from './TaskTimeline';
 
 import { useTheme } from '../context/ThemeContext';
+import { useSchema } from '../context/SchemaContext';
 
 const { TextArea } = Input;
 
@@ -403,13 +404,53 @@ interface ChatWindowProps {
     isLeftCollapsed?: boolean;
     onResetSession?: () => void;
     projectId?: string;
+    projectName?: string;
 }
 
-const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession, projectId }) => {
+const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, latestData, onToggleSidebar, isLeftCollapsed, onResetSession, projectId, projectName }) => {
     const { isDarkMode } = useTheme();
+    const { dbTables } = useSchema();
     const [inputValue, setInputValue] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { message } = App.useApp();
+
+    // Dynamic Examples Logic
+    const generateExamples = () => {
+        const tables = dbTables.map(t => t.name.toLowerCase());
+        const examples: { text: string; desc: string }[] = [];
+        
+        // Logic to generate examples
+        if (tables.some(t => t.includes('order') || t.includes('sale'))) {
+            examples.push({ text: "统计最近30天的订单总量", desc: "📊 统计订单总量" });
+            examples.push({ text: "分析每个月的销售额趋势", desc: "📈 分析销售趋势" });
+        }
+        if (tables.some(t => t.includes('user') || t.includes('customer'))) {
+             examples.push({ text: "统计本月新增用户数量", desc: "👥 统计新增用户" });
+        }
+         if (tables.some(t => t.includes('product') || t.includes('item'))) {
+             examples.push({ text: "列出销量最高的前10个商品", desc: "🛍️ 热销商品排行" });
+        }
+        
+        // Fallback
+        if (examples.length < 3 && dbTables.length > 0) {
+             const t = dbTables[0].name;
+             examples.push({ text: `查询 ${t} 表的前10条数据`, desc: `🔎 查询 ${t} 表` });
+        }
+         if (examples.length < 3 && dbTables.length > 1) {
+             const t = dbTables[1].name;
+             examples.push({ text: `统计 ${t} 表的总记录数`, desc: `🔢 统计 ${t} 数量` });
+        }
+        
+        // Deduplicate and limit
+        return examples.slice(0, 3);
+    };
+    
+    const dynamicExamples = generateExamples();
+    const displayExamples = dynamicExamples.length > 0 ? dynamicExamples : [
+         { text: "统计每个用户的订单数量，并按数量降序排列", desc: "📊 统计用户订单数量" },
+         { text: "分析最近7天的销售趋势", desc: "📈 分析销售趋势" },
+         { text: "找出最畅销的前10个商品", desc: "🛍️ 找出热销商品" }
+    ];
 
     // Plan Modal
     const [viewingPlan, setViewingPlan] = useState<TaskItem[] | null>(null);
@@ -700,7 +741,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     }}>
                         <RobotOutlined style={{ color: 'white', fontSize: 20 }} />
                     </div>
-                    智能对话助手
+                    {projectName || '智能对话助手'}
                 </div>
                 <div style={{display: 'flex', gap: 8}}>
                      <Tooltip title="基于当前上下文生成分析报告">
@@ -778,30 +819,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                         }}>
                             <h4 style={{ margin: '0 0 12px 0', color: isDarkMode ? '#e0e0e0' : '#333', fontSize: 14, fontWeight: 600 }}>🎯 试试这些示例</h4>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                <Button 
-                                    type="text" 
-                                    size="small" 
-                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
-                                    onClick={() => onSendMessage("统计每个用户的订单数量，并按数量降序排列", "start")}
-                                >
-                                    📊 统计用户订单数量
-                                </Button>
-                                <Button 
-                                    type="text" 
-                                    size="small" 
-                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
-                                    onClick={() => onSendMessage("分析最近7天的销售趋势", "start")}
-                                >
-                                    📈 分析销售趋势
-                                </Button>
-                                <Button 
-                                    type="text" 
-                                    size="small" 
-                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
-                                    onClick={() => onSendMessage("找出最畅销的前10个商品", "start")}
-                                >
-                                    🛍️ 找出热销商品
-                                </Button>
+                                {displayExamples.map((ex, i) => (
+                                    <Button 
+                                        key={i}
+                                        type="text" 
+                                        size="small" 
+                                        style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
+                                        onClick={() => onSendMessage(ex.text, "start")}
+                                    >
+                                        {ex.desc}
+                                    </Button>
+                                ))}
                             </div>
                         </div>
                     </div>
