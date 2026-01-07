@@ -1,4 +1,3 @@
-import pytest
 from src.domain.sandbox import StatefulSandbox
 
 # Python 沙箱安全性测试用例

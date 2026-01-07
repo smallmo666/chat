@@ -44,5 +44,12 @@ export type TreeDataNode = {
     icon?: React.ReactNode;
 }
 
+export interface ChatSession {
+    id: string;
+    title: string;
+    updated_at: string;
+    project_id: number;
+}
+
 // Dummy export to ensure this is treated as a module
 export const _types = true;

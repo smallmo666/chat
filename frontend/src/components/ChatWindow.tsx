@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card } from 'antd';
-import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined, PartitionOutlined, BulbOutlined } from '@ant-design/icons';
+import { Button, Input, Collapse, Space, Tooltip, App, Modal, Typography, Card, message as antdMessage } from 'antd';
+import { UserOutlined, RobotOutlined, SyncOutlined, CaretRightOutlined, LoadingOutlined, SendOutlined, DownloadOutlined, LikeOutlined, DislikeOutlined, PushpinOutlined, PlayCircleOutlined, CheckCircleOutlined, MenuUnfoldOutlined, MenuFoldOutlined, FileTextOutlined, AudioOutlined, ExportOutlined, EditOutlined, CodeOutlined, PartitionOutlined, BulbOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import Editor from '@monaco-editor/react';
+const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 import axios from 'axios';
 import type { Message, TaskItem } from '../types';
 import ArtifactRenderer from './ArtifactRenderer';
@@ -18,7 +18,7 @@ const { TextArea } = Input;
 
 // 1. Memoized Markdown Content
 const MemoizedMarkdown = memo(({ content, isDarkMode }: { content: string, isDarkMode: boolean }) => (
-    <div className="markdown-body" style={{fontSize: 15, lineHeight: 1.6, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
+    <div className="markdown-body" style={{fontSize: 14, lineHeight: 1.5, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
         <ReactMarkdown 
             remarkPlugins={[remarkGfm]}
             components={{
@@ -58,12 +58,10 @@ const MemoizedMarkdown = memo(({ content, isDarkMode }: { content: string, isDar
 ), (prev, next) => prev.content === next.content && prev.isDarkMode === next.isDarkMode);
 
 // 2. Memoized Message Item
-const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, onSendMessage, setReviewSql, setEditableSql, setIsReviewOpen, setViewingPlan, setIsPlanModalOpen, handleFeedback, setEditablePythonCode, setPythonExecResult, setIsPythonEditOpen, latestData }: any) => {
+const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, onSendMessage, setEditableSql, setIsReviewOpen, setViewingPlan, setIsPlanModalOpen, handleFeedback, setEditablePythonCode, setPythonExecResult, setIsPythonEditOpen, latestData }: any) => {
 
-    // Helper to render content (moved inside or passed as prop, here copied for simplicity but using MemoizedMarkdown)
+    // Helper to render content
     const renderContent = (content: string | any, role: string) => {
-        // ... (Logic for JSON cards remains same, can be refactored further)
-        // For brevity, we focus on the Markdown part optimization
         
         // Try to parse JSON for interactive cards
         if (role === 'agent' && typeof content === 'string' && (content.trim().startsWith('{') || content.trim().startsWith('```json'))) {
@@ -140,6 +138,25 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
              );
         }
 
+        // Handle Plan Event (Embedded TaskTimeline)
+        if (role === 'agent' && item.plan) {
+            return (
+                <div style={{ marginTop: 8, marginBottom: 8, width: '100%', minWidth: 300 }}>
+                    <Card
+                        size="small"
+                        title={<Space><PartitionOutlined style={{color: '#1677ff'}} /> 执行计划</Space>}
+                        style={{ 
+                            background: isDarkMode ? '#1f1f1f' : '#f9f9f9', 
+                            borderColor: isDarkMode ? '#303030' : '#f0f0f0' 
+                        }}
+                        styles={{ body: { padding: '12px 16px' } }}
+                    >
+                        <TaskTimeline tasks={item.plan} />
+                    </Card>
+                </div>
+            );
+        }
+
         if (typeof content === 'string') {
              return <MemoizedMarkdown content={content} isDarkMode={isDarkMode} />;
         }
@@ -181,13 +198,13 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
 
                 {/* Bubble */}
                 <div style={{ 
-                    padding: '12px 16px', 
-                    borderRadius: item.role === 'user' ? '16px 0 16px 16px' : '0 16px 16px 16px',
+                    padding: '10px 14px', 
+                    borderRadius: item.role === 'user' ? '14px 0 14px 14px' : '0 14px 14px 14px',
                     background: item.role === 'user' ? 'linear-gradient(135deg, #2b32b2 0%, #1488cc 100%)' : (isDarkMode ? '#1f1f1f' : '#fff'),
                     color: item.role === 'user' ? 'white' : (isDarkMode ? '#e0e0e0' : '#1f1f1f'),
                     boxShadow: item.role === 'user' ? '0 4px 12px rgba(20, 136, 204, 0.2)' : '0 2px 8px rgba(0,0,0,0.04)',
                     border: item.role === 'agent' ? (isDarkMode ? '1px solid #303030' : '1px solid rgba(0,0,0,0.04)') : 'none',
-                    fontSize: '15px',
+                    fontSize: '14px',
                     lineHeight: 1.5,
                     overflow: 'hidden',
                     minWidth: 60
@@ -197,7 +214,7 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
                         <Collapse 
                             size="small"
                             ghost
-                            defaultActiveKey={isLoading && isLastMessage ? ['1'] : []}
+                            defaultActiveKey={[]}
                             expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: 10, color: '#999' }} />}
                             items={[{ 
                                 key: '1', 
@@ -232,7 +249,6 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
                             style={{ borderColor: '#faad14', background: '#fffbe6', marginTop: 8 }}
                             styles={{ body: { padding: '8px 12px' } }}
                             extra={<Button type="primary" size="small" onClick={() => {
-                                setReviewSql(item.content);
                                 setEditableSql(item.content);
                                 setIsReviewOpen(true);
                             }}>审核</Button>}
@@ -357,7 +373,7 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
                                                     timestamp: Date.now()
                                                 });
                                                 localStorage.setItem('pinned_charts', JSON.stringify(charts));
-                                                message.success("已收藏");
+                                                antdMessage.success("已收藏");
                                             }}
                                         />
                                     </Tooltip>
@@ -371,15 +387,10 @@ const MessageItem = memo(({ item, index, isDarkMode, isLoading, isLastMessage, o
     );
 }, (prev, next) => {
     // Custom equality check for performance
-    // Re-render if:
-    // 1. Message content changed (e.g. streaming update)
-    // 2. Is loading state changed AND this is the last message
-    // 3. Dark mode changed
     if (prev.isDarkMode !== next.isDarkMode) return false;
-    if (prev.item !== next.item) return false; // Reference check usually enough for immutable updates
+    if (prev.item !== next.item) return false;
     if (prev.isLastMessage !== next.isLastMessage) return false;
     if (prev.isLastMessage && prev.isLoading !== next.isLoading) return false;
-    
     return true; 
 });
 
@@ -405,7 +416,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
 
     // HITL States
-    const [reviewSql, setReviewSql] = useState<string | null>(null);
     const [isReviewOpen, setIsReviewOpen] = useState(false);
     const [editableSql, setEditableSql] = useState('');
     
@@ -431,7 +441,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     useEffect(() => {
         const lastMsg = messages[messages.length - 1];
         if (lastMsg && lastMsg.role === 'agent' && lastMsg.interrupt) {
-            setReviewSql(lastMsg.content); // Content holds the SQL
             setEditableSql(lastMsg.content);
             setIsReviewOpen(true);
         }
@@ -462,7 +471,32 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                 setIsRecording(false);
             };
         }
-    }, []);
+
+        // 键盘快捷键支持
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ctrl/Cmd + Enter 发送消息
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+            // Ctrl/Cmd + / 聚焦输入框
+            if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+                e.preventDefault();
+                const textarea = document.querySelector('textarea');
+                if (textarea) {
+                    textarea.focus();
+                }
+            }
+            // Esc 清除输入
+            if (e.key === 'Escape' && inputValue) {
+                e.preventDefault();
+                setInputValue('');
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [inputValue]); // 依赖inputValue以便在输入变化时更新快捷键逻辑
 
     const toggleRecording = () => {
         if (!recognitionRef.current) {
@@ -529,13 +563,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     const handleApprove = () => {
         onSendMessage("", "approve");
         setIsReviewOpen(false);
-        setReviewSql(null);
     };
   
     const handleEditAndRun = () => {
         onSendMessage("", "edit", editableSql);
         setIsReviewOpen(false);
-        setReviewSql(null);
     };
 
     const handleRunPython = async () => {
@@ -601,7 +633,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         document.body.removeChild(link);
     };
 
-    const handleFeedback = async (index: number, type: 'like' | 'dislike') => {
+    const handleFeedback = async (_index: number, type: 'like' | 'dislike') => {
         // Find the audit log ID or session context
         // Since we don't have direct access to audit ID in current message structure,
         // we might need to rely on the backend's knowledge or store audit_id in message metadata.
@@ -632,134 +664,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         }
     };
 
-    // Helper to render content
-    const renderContent = (content: string | any, role: string, onOptionSelect?: (option: string) => void) => {
-        // Try to parse JSON for interactive cards
-        if (role === 'agent' && typeof content === 'string' && (content.trim().startsWith('{') || content.trim().startsWith('```json'))) {
-             try {
-                let jsonStr = content.trim();
-                if (jsonStr.startsWith('```json')) {
-                    jsonStr = jsonStr.replace(/^```json/, '').replace(/```$/, '');
-                } else if (jsonStr.startsWith('```')) {
-                    jsonStr = jsonStr.replace(/^```/, '').replace(/```$/, '');
-                }
-                
-                const data = JSON.parse(jsonStr);
-                
-                // Clarify Intent Card
-                if (data.status === 'AMBIGUOUS' && data.options && Array.isArray(data.options)) {
-                    return (
-                        <Card 
-                            size="small" 
-                            title={<Space><CheckCircleOutlined style={{color: '#1677ff'}} /> 需要确认</Space>}
-                            style={{ borderColor: '#e6f4ff', background: isDarkMode ? '#1f1f1f' : '#f0f5ff', minWidth: 300 }}
-                            styles={{ body: { padding: '12px 16px' } }}
-                        >
-                            <Typography.Paragraph strong style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{data.question}</Typography.Paragraph>
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                                {data.options.map((opt: string, idx: number) => (
-                                    <Button 
-                                        key={idx} 
-                                        block 
-                                        style={{ textAlign: 'left' }}
-                                        onClick={() => onOptionSelect && onOptionSelect(opt)}
-                                    >
-                                        {opt}
-                                    </Button>
-                                ))}
-                            </Space>
-                        </Card>
-                    );
-                }
-             } catch (e) {
-                 // Ignore JSON parse error, treat as text
-             }
-        }
-
-
-        
-        // Handle Code Generated Event (Special Card)
-        if (role === 'agent' && typeof content === 'string' && content.startsWith('__CODE_GENERATED__')) {
-             const code = content.replace('__CODE_GENERATED__', '');
-             return (
-                 <Card 
-                    size="small" 
-                    title={<Space><CodeOutlined style={{color: '#1677ff'}} /> Python 分析代码</Space>}
-                    extra={
-                        <Button 
-                            type="link" 
-                            size="small" 
-                            icon={<EditOutlined />} 
-                            onClick={() => {
-                                setEditablePythonCode(code);
-                                setPythonExecResult(null);
-                                setIsPythonEditOpen(true);
-                            }}
-                        >
-                            编辑 & 运行
-                        </Button>
-                    }
-                    style={{ 
-                        borderColor: isDarkMode ? '#303030' : '#e6f4ff', 
-                        background: isDarkMode ? '#141414' : '#f0f5ff',
-                        marginBottom: 12
-                    }}
-                    styles={{ body: { padding: 0 } }}
-                 >
-                     <div style={{ maxHeight: 200, overflow: 'auto', padding: '8px 12px' }}>
-                        <pre style={{ margin: 0, fontSize: 12, fontFamily: 'monospace', color: isDarkMode ? '#aaa' : '#666' }}>
-                            {code}
-                        </pre>
-                     </div>
-                 </Card>
-             );
-        }
-
-        if (typeof content === 'string') {
-             return (
-                <div className="markdown-body" style={{minHeight: role === 'agent' ? 24 : 'auto', fontSize: 15, lineHeight: 1.6, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
-                    <ReactMarkdown 
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                            code({node, inline, className, children, ...props}: any) {
-                                return !inline ? (
-                                    <div style={{background: isDarkMode ? '#141414' : '#f6f8fa', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: '8px 0', border: isDarkMode ? '1px solid #303030' : '1px solid #e1e4e8'}}>
-                                        <code className={className} {...props} style={{fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', fontSize: '85%', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
-                                            {children}
-                                        </code>
-                                    </div>
-                                ) : (
-                                    <code className={className} {...props} style={{background: isDarkMode ? 'rgba(110, 118, 129, 0.4)' : 'rgba(175, 184, 193, 0.2)', padding: '0.2em 0.4em', borderRadius: '6px', fontSize: '85%', fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>
-                                        {children}
-                                    </code>
-                                )
-                            },
-                            table({children, ...props}: any) {
-                                return <div style={{overflowX: 'auto', margin: '12px 0'}}><table {...props} style={{borderCollapse: 'collapse', width: '100%', fontSize: 14}}>{children}</table></div>
-                            },
-                            th({children, ...props}: any) {
-                                return <th {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', background: isDarkMode ? '#1f1f1f' : '#f6f8fa', fontWeight: 600, textAlign: 'left', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</th>
-                            },
-                            td({children, ...props}: any) {
-                                return <td {...props} style={{border: isDarkMode ? '1px solid #303030' : '1px solid #d0d7de', padding: '8px 12px', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</td>
-                            },
-                            p({children, ...props}: any) {
-                                return <div {...props} style={{marginBottom: 16, color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</div>
-                            },
-                            li({children, ...props}: any) {
-                                return <li {...props} style={{color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{children}</li>
-                            }
-                        }}
-                    >
-                        {content}
-                    </ReactMarkdown>
-                </div>
-            );
-        }
-        
-        return <div style={{minHeight: role === 'agent' ? 24 : 'auto', color: isDarkMode ? '#e0e0e0' : 'inherit'}}>{content}</div>;
-    };
-
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: isDarkMode ? '#141414' : '#fff', position: 'relative', color: isDarkMode ? '#e0e0e0' : 'inherit' }}>
             {/* Header */}
@@ -777,7 +681,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                          <Tooltip title={isLeftCollapsed ? "展开侧边栏" : "收起侧边栏"}>
                             <Button 
                                 type="text" 
-                                icon={isLeftCollapsed ? <MenuUnfoldOutlined /> : <MenuUnfoldOutlined rotate={180} />} 
+                                icon={isLeftCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} 
                                 onClick={onToggleSidebar} 
                                 style={{marginRight: 12, color: isDarkMode ? '#e0e0e0' : 'inherit'}}
                             />
@@ -843,8 +747,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             </div>
 
             {/* Chat Area */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 100px 24px', scrollBehavior: 'smooth' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px 100px 24px', scrollBehavior: 'smooth' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {messages.length === 0 && (
                     <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
                         <div style={{ 
@@ -862,11 +766,53 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             <RobotOutlined />
                         </div>
                         <h3 style={{ fontSize: 18, color: '#333', marginBottom: 8, fontWeight: 500 }}>开始新的对话</h3>
-                        <p style={{ color: '#888' }}>您可以询问有关数据库的任何问题，例如“查询上个月的销售额”</p>
+                        <p style={{ color: '#888', marginBottom: 24 }}>您可以询问有关数据库的任何问题，例如"查询上个月的销售额"</p>
+                        
+                        <div style={{ 
+                            background: isDarkMode ? '#1f1f1f' : '#f9f9f9', 
+                            borderRadius: 12, 
+                            padding: '20px', 
+                            margin: '0 auto', 
+                            maxWidth: 400,
+                            border: `1px solid ${isDarkMode ? '#303030' : '#e8e8e8'}`
+                        }}>
+                            <h4 style={{ margin: '0 0 12px 0', color: isDarkMode ? '#e0e0e0' : '#333', fontSize: 14, fontWeight: 600 }}>🎯 试试这些示例</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                <Button 
+                                    type="text" 
+                                    size="small" 
+                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
+                                    onClick={() => onSendMessage("统计每个用户的订单数量，并按数量降序排列", "start")}
+                                >
+                                    📊 统计用户订单数量
+                                </Button>
+                                <Button 
+                                    type="text" 
+                                    size="small" 
+                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
+                                    onClick={() => onSendMessage("分析最近7天的销售趋势", "start")}
+                                >
+                                    📈 分析销售趋势
+                                </Button>
+                                <Button 
+                                    type="text" 
+                                    size="small" 
+                                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
+                                    onClick={() => onSendMessage("找出最畅销的前10个商品", "start")}
+                                >
+                                    🛍️ 找出热销商品
+                                </Button>
+                            </div>
+                        </div>
                     </div>
                 )}
-                {messages.map((item, index) => (
-                    <MessageItem 
+                {(() => {
+                    const start = Math.max(0, messages.length - 200);
+                    const visible = messages.slice(start);
+                    return visible.map((item, idx) => {
+                        const index = start + idx;
+                        return (
+                        <MessageItem 
                         key={index}
                         item={item}
                         index={index}
@@ -874,7 +820,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                         isLoading={isLoading}
                         isLastMessage={index === messages.length - 1}
                         onSendMessage={onSendMessage}
-                        setReviewSql={setReviewSql}
                         setEditableSql={setEditableSql}
                         setIsReviewOpen={setIsReviewOpen}
                         setViewingPlan={setViewingPlan}
@@ -885,7 +830,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                         setIsPythonEditOpen={setIsPythonEditOpen}
                         latestData={latestData}
                     />
-                ))}
+                        );
+                    });
+                })()}
                 </div>
                 <div ref={messagesEndRef} />
             </div>
@@ -1029,7 +976,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     <Typography.Text type="secondary">智能体生成了以下 SQL，您可以在执行前进行修改。</Typography.Text>
                 </div>
                 <div style={{ border: '1px solid #d9d9d9', borderRadius: 8, overflow: 'hidden' }}>
-                    <Editor
+                    <React.Suspense fallback={<div style={{height:300, display:'flex', alignItems:'center', justifyContent:'center', color:'#999'}}><LoadingOutlined style={{marginRight:8}} />加载编辑器...</div>}>
+                    <MonacoEditor
                         height="300px"
                         defaultLanguage="sql"
                         value={editableSql}
@@ -1042,6 +990,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             tabSize: 4
                         }}
                     />
+                    </React.Suspense>
                 </div>
             </Modal>
             {/* Python Edit Modal */}
@@ -1069,7 +1018,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                             </Button>
                         </div>
                         <div style={{ flex: 1 }}>
-                            <Editor
+                            <React.Suspense fallback={<div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#999'}}><LoadingOutlined style={{marginRight:8}} />加载编辑器...</div>}>
+                            <MonacoEditor
                                 height="100%"
                                 defaultLanguage="python"
                                 value={editablePythonCode}
@@ -1083,6 +1033,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                                     tabSize: 4
                                 }}
                             />
+                            </React.Suspense>
                         </div>
                     </div>
                     

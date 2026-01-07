@@ -12,14 +12,14 @@ import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 
-const { Header, Sider, Content } = Layout;
+const { Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
 
 const AppLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const screens = useBreakpoint();
-  const { theme, toggleTheme, isDarkMode } = useTheme();
+  const { toggleTheme, isDarkMode } = useTheme();
   
   // Auto collapse on mobile
   useEffect(() => {
@@ -53,6 +53,7 @@ const AppLayout = () => {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
+      {!isFullPage && (
       <Sider 
         trigger={null} 
         collapsible 
@@ -85,7 +86,7 @@ const AppLayout = () => {
             transition: 'all 0.2s',
             opacity: collapsed ? 0.7 : 1
           }}>
-            {collapsed ? 'DA' : '数据分析智能体'}
+            {collapsed ? 'DA' : 'DataAgent'}
           </span>
         </div>
         
@@ -129,6 +130,7 @@ const AppLayout = () => {
              </div>
         </div>
       </Sider>
+      )}
       <Layout>
         {/* Overlay for mobile sidebar */}
         {isMobile && !collapsed && (

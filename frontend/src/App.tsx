@@ -52,7 +52,7 @@ const AppRoutes = () => {
 }
 
 const AppContent: React.FC = () => {
-  const { theme: currentTheme, isDarkMode } = useTheme();
+  const { isDarkMode } = useTheme();
 
   return (
     <ConfigProvider

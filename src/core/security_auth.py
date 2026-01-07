@@ -13,6 +13,15 @@ from src.core.config import settings
 import bcrypt
 
 # --- Monkeypatch for bcrypt >= 4.0.0 compatibility ---
+# 1. Fix missing __about__ attribute
+try:
+    bcrypt.__about__
+except AttributeError:
+    class MockAbout:
+        __version__ = bcrypt.__version__
+    bcrypt.__about__ = MockAbout()
+
+# 2. Fix 72 byte limit check
 # passlib 1.7.4 tries to detect a "wrap bug" by hashing a long password,
 # but bcrypt >= 4.0.0 raises ValueError for passwords > 72 bytes.
 # We patch hashpw to truncate input, satisfying passlib's check.

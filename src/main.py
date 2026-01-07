@@ -22,8 +22,7 @@ from src.core.logging import setup_logging, console
 
 # console = Console() # Removed local instantiation
 
-async def main():
-    setup_logging()List[Dict[str, str]], thinking_text: str = "") -> Group:
+def create_ui_layout(plan_steps: List[Dict[str, str]], thinking_text: str = "") -> Group:
     """Create the UI layout with Plan Table and Thinking Panel."""
     
     # Plan Table

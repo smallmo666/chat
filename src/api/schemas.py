@@ -9,7 +9,7 @@ class DataSourceCreate(BaseModel):
     port: int
     user: str
     password: str
-    dbname: str
+    dbname: Optional[str] = None
 
 class DataSourceRead(BaseModel):
     id: int
@@ -19,7 +19,7 @@ class DataSourceRead(BaseModel):
     port: int
     user: str
     # password field is intentionally excluded for security
-    dbname: str
+    dbname: Optional[str] = None
 
 # --- Project Schemas ---
 class ProjectCreate(BaseModel):
@@ -43,6 +43,24 @@ class ChatRequest(BaseModel):
     # HITL Control
     command: Optional[str] = "start" # start, approve, edit
     modified_sql: Optional[str] = None
+
+class PythonExecRequest(BaseModel):
+    code: str
+    project_id: str
+
+# --- Session Management Schemas ---
+class SessionListRequest(BaseModel):
+    project_id: int
+
+class SessionHistoryRequest(BaseModel):
+    session_id: str
+
+class SessionDeleteRequest(BaseModel):
+    session_id: str
+
+class SessionUpdateRequest(BaseModel):
+    session_id: str
+    title: str
 
 # --- Audit/Feedback Schemas ---
 class FeedbackRequest(BaseModel):

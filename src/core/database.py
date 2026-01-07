@@ -1,17 +1,18 @@
-import os
-import random
 import pandas as pd
 import hashlib
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
-from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
-from sqlmodel import SQLModel, create_engine as create_sqlmodel_engine, Session, select
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlalchemy.pool import  AsyncAdaptedQueuePool
+from sqlmodel import SQLModel, create_engine as create_sqlmodel_engine, Session
 from dotenv import load_dotenv
 import json
 import re
-from src.core.models import DataSource, Project, AuditLog
+import sqlglot
+from src.core.models import DataSource, Project
 from src.core.config import settings
 from src.core.redis_client import get_redis_client
+from src.core.metrics import QueryMetrics
+import time
 
 load_dotenv()
 
@@ -32,35 +33,41 @@ class QueryDatabase:
             raise ValueError("必须提供 DataSource 配置。默认回退已禁用。")
         
         # 根据类型构建连接字符串
+        # 如果 dbname 为空，使用默认维护库
+        self.effective_dbname = self.dbname or ("postgres" if self.type == "postgresql" else "mysql")
+        
         if self.type == "postgresql":
             # 异步
-            self.async_connection_string = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
+            self.async_connection_string = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}"
             # 同步 (仅用于 Schema Inspector)
-            self._sync_conn_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}?client_encoding=utf8"
+            self._sync_conn_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}?client_encoding=utf8"
         elif self.type == "mysql":
-            self.async_connection_string = f"mysql+aiomysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
-            self._sync_conn_str = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
+            self.async_connection_string = f"mysql+aiomysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}"
+            self._sync_conn_str = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}"
         else:
             # 默认为 postgres
-            self.async_connection_string = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
-            self._sync_conn_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}?client_encoding=utf8"
+            self.async_connection_string = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}"
+            self._sync_conn_str = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_dbname}?client_encoding=utf8"
         
         try:
             # 异步引擎 (用于高性能查询执行)
             # 生产环境配置: 使用连接池
             self.async_engine = create_async_engine(
                 self.async_connection_string, 
-                pool_pre_ping=True, # 自动检测断连
+                pool_pre_ping=True,
                 poolclass=AsyncAdaptedQueuePool,
-                pool_size=10,       # 默认连接池大小
-                max_overflow=20,    # 最大溢出连接数
-                pool_recycle=3600   # 1小时回收连接
+                pool_size=settings.QUERY_POOL_SIZE,
+                max_overflow=settings.QUERY_MAX_OVERFLOW,
+                pool_recycle=settings.QUERY_POOL_RECYCLE
             )
             
             # 多数据库支持：缓存不同数据库的 Engine
+            # 如果 dbname 指定了，默认 engine 就是它；如果没指定，default engine 是 postgres/mysql 维护库
             self._db_engines = {"default": self.async_engine}
+            if self.dbname:
+                self._db_engines[self.dbname] = self.async_engine
             
-            print(f"已连接到查询数据库 (Async): {self.host}:{self.port}/{self.dbname}")
+            print(f"已连接到查询数据库 (Async): {self.host}:{self.port}/{self.effective_dbname}")
         except Exception as e:
             print(f"查询数据库连接失败: {e}")
             raise e
@@ -87,9 +94,9 @@ class QueryDatabase:
                 conn_str,
                 pool_pre_ping=True,
                 poolclass=AsyncAdaptedQueuePool,
-                pool_size=5,
-                max_overflow=10,
-                pool_recycle=3600
+                pool_size=settings.ROUTE_POOL_SIZE,
+                max_overflow=settings.ROUTE_MAX_OVERFLOW,
+                pool_recycle=settings.QUERY_POOL_RECYCLE
             )
             self._db_engines[db_name] = engine
             return engine
@@ -132,7 +139,7 @@ class QueryDatabase:
                 # Create a unique hash for the scope config
                 scope_str = json.dumps(scope_config, sort_keys=True) if scope_config else "full"
                 scope_hash = hashlib.md5(scope_str.encode()).hexdigest()
-                cache_key = f"schema:{project_id}:{scope_hash}"
+                cache_key = f"t2s:v1:schema:{project_id}:{scope_hash}"
                 
                 cached_schema = redis_client.get(cache_key)
                 if cached_schema:
@@ -154,12 +161,24 @@ class QueryDatabase:
                 target_tables = set(scope_config["tables"])
         
         if not target_dbs:
-            target_dbs = self._get_databases()
-            priority_dbs = ['households', 'virtual_idol', 'sports_events', 'solar_panel', 'transportation']
-            final_dbs = [db for db in target_dbs if db in priority_dbs]
-            if not final_dbs and target_dbs:
-                final_dbs = target_dbs[:5]
-            target_dbs = final_dbs
+            # 如果配置中未指定，或者 dbname 为空，尝试获取所有数据库
+            # 注意：如果 dbname 有值，我们通常只 inspect 该库，除非 scope_config 明确扩大了范围
+            # 但这里为了向后兼容，如果 scope_config 没填，我们之前的行为是 inspect 所有库 (通过 priority list)
+            # 现在的逻辑：
+            # 1. 如果 scope_config 有 databases，用它。
+            # 2. 否则，如果 dbname 有值，只 inspect dbname。
+            # 3. 如果 dbname 为空，inspect 所有库 (filtered)。
+            
+            if self.dbname:
+                target_dbs = [self.dbname]
+            else:
+                target_dbs = self._get_databases()
+                # 移除过滤策略，全量返回所有非系统库
+                # priority_dbs = ['households', 'virtual_idol', 'sports_events', 'solar_panel', 'transportation']
+                # final_dbs = [db for db in target_dbs if db in priority_dbs]
+                # if not final_dbs and target_dbs:
+                #     final_dbs = target_dbs[:5]
+                # target_dbs = final_dbs
 
         print(f"QueryDB: 正在检查数据库: {target_dbs}")
 
@@ -213,8 +232,7 @@ class QueryDatabase:
         # Save to Redis cache
         if cache_key and redis_client:
             try:
-                # Cache for 1 hour
-                redis_client.setex(cache_key, 3600, result_json)
+                redis_client.setex(cache_key, settings.REDIS_SCHEMA_TTL, result_json)
                 print(f"QueryDB: Schema cached to Redis: {cache_key}")
             except Exception as e:
                 print(f"Failed to save schema to Redis: {e}")
@@ -227,7 +245,8 @@ class QueryDatabase:
         支持简单的多数据库路由 (基于 'dbname.table' 命名约定)。
         支持 SQL 结果缓存。
         """
-        print(f"DEBUG: QueryDatabase.run_query_async - Executing: {query}")
+        if settings.ENV == "development":
+            print(f"DEBUG: QueryDatabase.run_query_async - Executing: {query}")
         
         # Check Query Cache
         cache_key = None
@@ -236,7 +255,7 @@ class QueryDatabase:
             try:
                 redis_client = get_redis_client()
                 query_hash = hashlib.md5(query.strip().lower().encode()).hexdigest()
-                cache_key = f"sql_result:{project_id}:{query_hash}"
+                cache_key = f"t2s:v1:sql:{project_id}:{query_hash}"
                 
                 cached_result = redis_client.get(cache_key)
                 if cached_result:
@@ -247,38 +266,34 @@ class QueryDatabase:
                 
         try:
             modified_query = query
-            target_engine = self.async_engine # Default
-            
-            # --- 简单的 SQL 路由逻辑 ---
-            # 检查是否包含 "FROM dbname.tablename" 模式
-            # 正则匹配 FROM 或 JOIN 后的 db.table
-            # 假设 dbname 是纯字母数字下划线
-            match = re.search(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)', query, re.IGNORECASE)
-            
-            if match:
-                db_name = match.group(1)
-                table_name = match.group(2)
-                
-                # 如果 db_name 不是 SQL 关键字且看起来像数据库名
-                # 简单的启发式：如果它在我们的 Schema 检查列表中 (需要维护或动态发现)
-                # 这里我们假设只要是 db.table 格式，前缀就是数据库名
-                
-                print(f"DEBUG: Routing - Detected target database: {db_name}")
-                
-                try:
+            target_engine = self.async_engine
+            qm = QueryMetrics()
+            t0 = time.time()
+
+            try:
+                ast = sqlglot.parse_one(query)
+                db_name = None
+                for table in ast.find_all(sqlglot.exp.Table):
+                    qualifiers = table.parts
+                    if len(qualifiers) >= 2:
+                        candidate = qualifiers[-2]
+                        if candidate.lower() != "public":
+                            db_name = candidate
+                            break
+                if db_name:
+                    print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
                     target_engine = self._get_engine_for_db(db_name)
-                    
-                    # 重写 SQL: 移除数据库前缀
-                    # 替换所有 "db_name." 为 "" (空字符串)
-                    # 注意：这可能会误伤字符串字面量中的内容，但在 Text2SQL 生成的简单 SQL 中风险较低
-                    # 更严谨的做法是使用 SQL Parser，但这里用正则简单处理
-                    modified_query = re.sub(rf'\b{db_name}\.', '', query)
-                    print(f"DEBUG: Routing - Rewritten SQL for {db_name}: {modified_query}")
-                    
-                except Exception as e:
-                    print(f"Routing failed, falling back to default DB: {e}")
-            # ---------------------------
-            
+                    def strip_db(sql: str, db: str) -> str:
+                        pattern = rf'\b{re.escape(db)}\.'
+                        return re.sub(pattern, '', sql)
+                    modified_query = strip_db(query, db_name)
+            except Exception as e:
+                print(f"sqlglot parse failed, fallback to default routing: {e}")
+
+            if "limit" not in modified_query.lower() and "count(" not in modified_query.lower():
+                modified_query = modified_query.strip().rstrip(';') + f" LIMIT {settings.DEFAULT_ROW_LIMIT}"
+                print(f"DEBUG: Auto LIMIT applied in run_query_async: {modified_query}")
+
             print(f"DEBUG: QueryDatabase.run_query_async - Connecting...")
             async with target_engine.connect() as conn:
                 print("DEBUG: QueryDatabase.run_query_async - Connected. Executing...")
@@ -286,10 +301,14 @@ class QueryDatabase:
                 result = await conn.execute(text(modified_query))
                 print("DEBUG: QueryDatabase.run_query_async - Executed. Fetching results...")
                 
-                # 获取所有结果
                 rows = result.mappings().all()
                 data = [dict(row) for row in rows]
                 print(f"DEBUG: QueryDatabase.run_query_async - Fetched {len(data)} rows.")
+                duration_ms = (time.time() - t0) * 1000.0
+                try:
+                    qm.record(project_id, len(data), duration_ms)
+                except Exception as _:
+                    pass
                 
                 if not data:
                     res = {
@@ -309,8 +328,7 @@ class QueryDatabase:
                 # Save to Cache
                 if cache_key and redis_client:
                     try:
-                        # Cache for 5 minutes
-                        redis_client.setex(cache_key, 300, json.dumps(res))
+                        redis_client.setex(cache_key, settings.REDIS_SQL_TTL, json.dumps(res))
                     except Exception as e:
                         print(f"Failed to cache SQL result: {e}")
                 

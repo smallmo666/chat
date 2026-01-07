@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tag, Typography, Timeline } from 'antd';
-import { LoadingOutlined, CheckCircleOutlined, ClockCircleOutlined, SyncOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, ClockCircleOutlined, SyncOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import type { TaskItem } from '../types';
 
 const { Text } = Typography;

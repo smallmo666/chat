@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Button, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag, Row, Col } from 'antd';
-import { PlusOutlined, ProjectOutlined, DatabaseOutlined, RightOutlined } from '@ant-design/icons';
+import { Card, Button, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag, Row, Col, Input as SearchInput } from 'antd';
+import { PlusOutlined, ProjectOutlined, DatabaseOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 
@@ -27,6 +27,7 @@ const ProjectPage: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const { message } = App.useApp();
+  const [searchText, setSearchText] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
@@ -67,32 +68,82 @@ const ProjectPage: React.FC = () => {
             <Title level={2} style={{ marginBottom: 0 }}>项目列表</Title>
             <Text type="secondary">管理您的数据分析项目工作区</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} size="large" onClick={() => setIsModalOpen(true)}>
-          新建项目
-        </Button>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <SearchInput
+            placeholder="搜索项目名称..."
+            prefix={<SearchOutlined />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 240 }}
+            allowClear
+          />
+          <Button type="primary" icon={<PlusOutlined />} size="large" onClick={() => setIsModalOpen(true)}>
+            新建项目
+          </Button>
+        </div>
       </div>
 
       {projects.length === 0 && !loading ? (
-        <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-                <span style={{color: '#888'}}>
-                    暂无项目，请先创建一个
-                </span>
-            }
-        >
-            <Button type="primary" onClick={() => setIsModalOpen(true)}>立即创建</Button>
-        </Empty>
+        <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                    <span style={{color: '#888', fontSize: 14}}>
+                        暂无项目，请先创建一个
+                    </span>
+                }
+            >
+                <div style={{ marginBottom: 16 }}>
+                    <Button type="primary" onClick={() => setIsModalOpen(true)} style={{ marginRight: 8 }}>
+                        立即创建
+                    </Button>
+                    <Button onClick={() => {
+                        // 创建示例项目
+                        const sampleProject = {
+                            name: '示例电商分析项目',
+                            data_source_id: dataSources.length > 0 ? dataSources[0].id : 1,
+                            description: '这是一个示例项目，展示了如何使用AI进行数据分析'
+                        };
+                        form.setFieldsValue(sampleProject);
+                        setIsModalOpen(true);
+                    }}>
+                        使用示例
+                    </Button>
+                </div>
+                <div style={{ 
+                    background: '#f5f7fa', 
+                    borderRadius: 8, 
+                    padding: '16px 20px', 
+                    marginTop: 24,
+                    textAlign: 'left',
+                    maxWidth: 400,
+                    margin: '24px auto 0'
+                }}>
+                    <h4 style={{ margin: '0 0 8px 0', color: '#333', fontSize: 14 }}>💡 快速入门</h4>
+                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: '#666' }}>
+                        <li>创建项目并关联数据源</li>
+                        <li>在对话页面输入自然语言查询</li>
+                        <li>AI将自动生成SQL并展示结果</li>
+                        <li>支持导出数据和生成分析报告</li>
+                    </ul>
+                </div>
+            </Empty>
+        </div>
       ) : (
         <Row gutter={[24, 24]}>
-            {projects.map((item) => (
+            {projects
+              .filter(item => 
+                searchText === '' || 
+                item.name.toLowerCase().includes(searchText.toLowerCase())
+              )
+              .map((item) => (
                 <Col key={item.id} xs={24} sm={12} md={8} lg={8} xl={6}>
                     <Card 
                         hoverable
                         style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #f0f0f0', height: '100%' }}
                         styles={{ body: { padding: 24 } }}
                         actions={[
-                            <Button type="link" onClick={() => navigate(`/chat/${item.id}`)}>
+                            <Button type="link" onClick={() => window.open(`/chat/${item.id}`, '_blank')}>
                                 进入分析 <RightOutlined />
                             </Button>
                         ]}

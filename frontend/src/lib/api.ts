@@ -1,6 +1,7 @@
 import axios from 'axios';
+import type { ChatSession } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -32,5 +33,24 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// Session Management API
+export const fetchSessions = async (projectId: number): Promise<ChatSession[]> => {
+    const response = await api.post<ChatSession[]>('/api/chat/sessions/list', { project_id: projectId });
+    return response.data;
+};
+
+export const fetchSessionHistory = async (sessionId: string): Promise<any[]> => {
+    const response = await api.post<any[]>('/api/chat/sessions/history', { session_id: sessionId });
+    return response.data;
+};
+
+export const deleteSession = async (sessionId: string) => {
+    return await api.post('/api/chat/sessions/delete', { session_id: sessionId });
+};
+
+export const updateSessionTitle = async (sessionId: string, title: string) => {
+    return await api.post('/api/chat/sessions/update', { session_id: sessionId, title });
+};
 
 export default api;

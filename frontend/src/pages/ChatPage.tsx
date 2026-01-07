@@ -1,22 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button, List, Space, message } from 'antd';
+import { Layout, ConfigProvider, theme, Typography, Splitter, Tag, Card, Table, Grid, Drawer, Button, List, Space, message, Tabs } from 'antd';
 import { Activity } from 'lucide-react';
-import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined, SearchOutlined, BulbOutlined, BgColorsOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import { TableOutlined, BarChartOutlined, FileTextOutlined, LoadingOutlined, SyncOutlined, DatabaseOutlined, ProjectOutlined, CodeOutlined, SearchOutlined, BulbOutlined, CommentOutlined } from '@ant-design/icons';
+const LazyECharts = React.lazy(() => import('echarts-for-react'));
 import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 
 import SchemaBrowser from '../components/SchemaBrowser';
 import ChatWindow from '../components/ChatWindow';
 import TaskTimeline from '../components/TaskTimeline';
-import type { Message, TaskItem } from '../types';
+import SessionList from '../components/SessionList';
+import type { Message, TaskItem, ChatSession } from '../types';
 import { SchemaProvider, useSchema } from '../context/SchemaContext';
+import { fetchSessions, fetchSessionHistory, deleteSession, updateSessionTitle } from '../lib/api';
 
 const { Content } = Layout;
-const { Title } = Typography;
 const { useBreakpoint } = Grid;
 
-import { ENDPOINTS } from '../config';
+import { ENDPOINTS, API_BASE_URL } from '../config';
 
 const ChatPageContent: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -32,9 +33,14 @@ const ChatPageContent: React.FC = () => {
   ]);
   const [threadId, setThreadId] = useState<string>('');
   
+  // Session Management State
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeLeftTab, setActiveLeftTab] = useState('schema');
+  
   // Mobile Drawer States
   const [showSchema, setShowSchema] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
   
   // State for latest data to export
   const [latestData, setLatestData] = useState<any[]>([]);
@@ -45,10 +51,27 @@ const ChatPageContent: React.FC = () => {
   // Use Context
   const { checkedKeys, setCheckedKeys } = useSchema();
 
+  // Load Session List
+  const loadSessions = async () => {
+      if (!projectId) return;
+      try {
+          const list = await fetchSessions(parseInt(projectId));
+          setSessions(list);
+      } catch (error) {
+          console.error("Failed to load sessions:", error);
+      }
+  };
+
   useEffect(() => {
       // Generate Thread ID on mount or retrieve from sessionStorage to persist across reloads
       // NOTE: For debugging loop issue, we force generate new ID if URL param changes or on hard reload
       let tid = sessionStorage.getItem('chat_thread_id');
+      
+      // If we have a project ID, try to load sessions
+      if (projectId) {
+          loadSessions();
+      }
+
       if (!tid) {
           tid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
           sessionStorage.setItem('chat_thread_id', tid);
@@ -57,11 +80,77 @@ const ChatPageContent: React.FC = () => {
       
       // Clear session storage on unmount to prevent stale state issues? No, we want persistence.
       // But we can add a way to clear it manually if needed.
-  }, []);
+  }, [projectId]);
+
+  // Session Actions
+  const handleSelectSession = async (sessionId: string) => {
+      try {
+          setIsLoading(true);
+          setThreadId(sessionId);
+          sessionStorage.setItem('chat_thread_id', sessionId);
+          
+          // Load history
+          const history = await fetchSessionHistory(sessionId);
+          
+          // Transform history to messages
+          const restoredMessages: Message[] = history.map((msg: any) => {
+              // Handle complex content if necessary
+              return {
+                  role: msg.type === 'human' ? 'user' : 'agent',
+                  content: msg.content
+              };
+          });
+          
+          setMessages(restoredMessages);
+          
+          // Reset tasks
+          setTasks([{ id: 'init', title: '会话已恢复', status: 'finish' }]);
+          
+          if (isMobile) setShowSessions(false);
+          
+      } catch (error) {
+          message.error('加载会话历史失败');
+          console.error(error);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  const handleNewChat = () => {
+      const newId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      setThreadId(newId);
+      sessionStorage.setItem('chat_thread_id', newId);
+      setMessages([]);
+      setTasks([{ id: 'init', title: '等待输入...', status: 'pending' }]);
+      if (isMobile) setShowSessions(false);
+      
+      // Optionally refresh list to ensure clean state, though new session isn't saved until first message
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+      try {
+          await deleteSession(sessionId);
+          message.success('会话已删除');
+          loadSessions();
+          if (threadId === sessionId) {
+              handleNewChat();
+          }
+      } catch (error) {
+          message.error('删除失败');
+      }
+  };
+
+  const handleUpdateTitle = async (sessionId: string, title: string) => {
+      try {
+          await updateSessionTitle(sessionId, title);
+          loadSessions();
+      } catch (error) {
+          message.error('重命名失败');
+      }
+  };
 
   const resetSession = () => {
-      sessionStorage.removeItem('chat_thread_id');
-      window.location.reload();
+      handleNewChat();
   };
 
   const handleSendMessage = async (userMsg: string) => {
@@ -110,11 +199,19 @@ const ChatPageContent: React.FC = () => {
           return;
       }
 
+      // Refresh session list after first message sent (to show new session title)
+      // Delay slightly to ensure backend created it
+      setTimeout(loadSessions, 1000);
+
       if (!response.body) return;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let thinkingBuffer = '';
+      let lastThinkingFlush = 0;
+      let eventCounters: Record<string, number> = {};
+      let lastHeartbeat = Date.now();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -140,17 +237,30 @@ const ChatPageContent: React.FC = () => {
               const data = JSON.parse(dataStr);
 
               if (eventType === 'thinking') {
-                setMessages(prev => {
-                    const newMsgs = [...prev];
-                    const lastMsg = newMsgs[newMsgs.length - 1];
-                    if (lastMsg && lastMsg.role === 'agent') {
-                        newMsgs[newMsgs.length - 1] = {
-                            ...lastMsg,
-                            thinking: (lastMsg.thinking || '') + data.content
-                        };
-                    }
-                    return newMsgs;
-                });
+                thinkingBuffer += data.content;
+                const now = performance.now();
+                if (now - lastThinkingFlush > 50) {
+                  const chunk = thinkingBuffer;
+                  thinkingBuffer = '';
+                  lastThinkingFlush = now;
+                  setMessages(prev => {
+                      const newMsgs = [...prev];
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      if (lastMsg && lastMsg.role === 'agent') {
+                          newMsgs[newMsgs.length - 1] = {
+                              ...lastMsg,
+                              thinking: (lastMsg.thinking || '') + chunk
+                          };
+                      }
+                      return newMsgs;
+                  });
+                }
+              }
+              eventCounters[eventType] = (eventCounters[eventType] || 0) + 1;
+              const nowTs = Date.now();
+              if (nowTs - lastHeartbeat > 5000) {
+                  lastHeartbeat = nowTs;
+                  console.log('SSE heartbeat', eventCounters);
               }
               else if (eventType === 'plan') {
                 const newTasks: TaskItem[] = data.content.map((step: any, index: number) => ({
@@ -161,18 +271,13 @@ const ChatPageContent: React.FC = () => {
                     logs: []
                 }));
                 setTasks(newTasks);
-                // Also update the current agent message with the plan
-                setMessages(prev => {
-                    const newMsgs = [...prev];
-                    const lastMsg = newMsgs[newMsgs.length - 1];
-                    if (lastMsg && lastMsg.role === 'agent') {
-                        newMsgs[newMsgs.length - 1] = {
-                            ...lastMsg,
-                            plan: newTasks
-                        };
-                    }
-                    return newMsgs;
-                });
+                
+                // Insert a new message for the plan
+                setMessages(prev => [...prev, {
+                    role: 'agent',
+                    content: '', // Empty content as we use plan field
+                    plan: newTasks
+                }]);
               }
               else if (eventType === 'step') {
                 updateStepStatus(data.node, data.status, data.details, data.duration);
@@ -323,12 +428,15 @@ const ChatPageContent: React.FC = () => {
                       return newMsgs;
                   });
               }
-              else if (eventType === 'code_generated') {
-                  const code = data.content;
-                  setMessages(prev => [...prev, { 
-                      role: 'agent', 
-                      content: '__CODE_GENERATED__' + code
-                  }]);
+              else if (eventType === 'data_download') {
+                  const token = data.content;
+                  const url = `${API_BASE_URL}/query/download?token=${encodeURIComponent(token)}`;
+                  const card = (
+                      <Card size="small" title="下载查询结果" style={{marginTop: 8}}>
+                          <a href={url} target="_blank" rel="noreferrer">点击下载 CSV</a>
+                      </Card>
+                  );
+                  setMessages(prev => [...prev, { role: 'agent', content: card }]);
               }
               else if (eventType === 'analysis') {
                   const markdownContent = (
@@ -374,7 +482,9 @@ const ChatPageContent: React.FC = () => {
                       const option = vizData.option || vizData;
                       vizContent = (
                           <Card size="small" title={<span style={{display:'flex', alignItems:'center'}}><BarChartOutlined style={{marginRight:6}}/> 可视化图表</span>} style={{marginTop: 8}}>
-                              <ReactECharts option={option} style={{height: 500, width: '100%'}} theme="macarons" />
+                              <React.Suspense fallback={<div style={{height:500, display:'flex', alignItems:'center', justifyContent:'center', color:'#999'}}><LoadingOutlined style={{marginRight:8}} />加载图表...</div>}>
+                                <LazyECharts option={option} style={{height: 500, width: '100%'}} theme="macarons" />
+                              </React.Suspense>
                           </Card>
                       );
                   }
@@ -425,6 +535,7 @@ const ChatPageContent: React.FC = () => {
   };
 
   const updateStepStatus = (node: string, _status: string, details: string, duration?: number) => {
+    // Update the tasks state (though we might not display it in sidebar anymore)
     setTasks(prev => {
       const newTasks = [...prev];
       const taskIndex = newTasks.findIndex(t => t.id === node);
@@ -451,6 +562,99 @@ const ChatPageContent: React.FC = () => {
       }
       return newTasks;
     });
+
+    // Also update the plan in the message history
+    setMessages(prev => {
+        // Find the last message that has a plan
+        // We need to clone deep enough
+        const newMsgs = [...prev];
+        // Reverse search for the plan message
+        let planMsgIndex = -1;
+        for (let i = newMsgs.length - 1; i >= 0; i--) {
+            if (newMsgs[i].plan) {
+                planMsgIndex = i;
+                break;
+            }
+        }
+
+        if (planMsgIndex !== -1) {
+            const planMsg = { ...newMsgs[planMsgIndex] };
+            const newPlan = [...(planMsg.plan || [])];
+            const taskIndex = newPlan.findIndex(t => t.id === node);
+
+            if (taskIndex !== -1) {
+                let desc: React.ReactNode = details || '完成';
+                if (details && details.length > 50) {
+                    desc = <Tag color="blue" style={{whiteSpace: 'normal', wordBreak: 'break-all'}}>{details}</Tag>;
+                }
+
+                newPlan[taskIndex] = {
+                    ...newPlan[taskIndex],
+                    status: 'finish',
+                    description: desc,
+                    duration: duration
+                };
+
+                if (taskIndex + 1 < newPlan.length) {
+                    if (newPlan[taskIndex + 1].status === 'pending') {
+                        newPlan[taskIndex + 1].status = 'process';
+                        newPlan[taskIndex + 1].description = <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag>;
+                    }
+                }
+                
+                planMsg.plan = newPlan;
+                newMsgs[planMsgIndex] = planMsg;
+            }
+        }
+        return newMsgs;
+    });
+  };
+
+  const renderLeftPanel = () => {
+      const items = [
+          {
+              key: 'schema',
+              label: '数据库',
+              icon: <DatabaseOutlined />,
+              children: (
+                  <SchemaBrowser 
+                    onCollapse={() => setLeftPanelSize(0)} 
+                    isCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)} 
+                    onExpand={() => setLeftPanelSize('20%')}
+                 />
+              )
+          },
+          {
+              key: 'sessions',
+              label: '会话列表',
+              icon: <CommentOutlined />,
+              children: (
+                  <SessionList 
+                    sessions={sessions}
+                    currentSessionId={threadId}
+                    onSelectSession={handleSelectSession}
+                    onNewChat={handleNewChat}
+                    onDeleteSession={handleDeleteSession}
+                    onUpdateTitle={handleUpdateTitle}
+                  />
+              )
+          }
+      ];
+
+      return (
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ padding: '0 16px', borderBottom: '1px solid #f0f0f0' }}>
+                <Tabs 
+                    activeKey={activeLeftTab} 
+                    onChange={setActiveLeftTab}
+                    items={items.map(i => ({ key: i.key, label: <span>{i.icon} {i.label}</span> }))}
+                />
+              </div>
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                  {items.find(i => i.key === activeLeftTab)?.children}
+              </div>
+          </div>
+      );
   };
 
   return (
@@ -486,8 +690,42 @@ const ChatPageContent: React.FC = () => {
              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                  {/* Mobile Header Toolbar */}
                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                     <Button icon={<DatabaseOutlined />} onClick={() => setShowSchema(true)}>表结构</Button>
-                     <Button icon={<ProjectOutlined />} onClick={() => setShowTasks(true)}>任务追踪</Button>
+                     <Button 
+                         icon={<DatabaseOutlined />} 
+                         onClick={() => setShowSchema(true)}
+                         style={{ 
+                             borderRadius: 20,
+                             padding: '4px 12px',
+                             height: 32,
+                             fontSize: 13
+                         }}
+                     >
+                         表结构
+                     </Button>
+                     <Button 
+                         icon={<CommentOutlined />} 
+                         onClick={() => setShowSessions(true)}
+                         style={{ 
+                             borderRadius: 20,
+                             padding: '4px 12px',
+                             height: 32,
+                             fontSize: 13
+                         }}
+                     >
+                         会话
+                     </Button>
+                     <Button 
+                         icon={<ProjectOutlined />} 
+                         onClick={() => setShowTasks(true)}
+                         style={{ 
+                             borderRadius: 20,
+                             padding: '4px 12px',
+                             height: 32,
+                             fontSize: 13
+                         }}
+                     >
+                         任务追踪
+                     </Button>
                  </div>
                  
                  {/* Main Chat Area */}
@@ -511,6 +749,23 @@ const ChatPageContent: React.FC = () => {
                  >
                      <SchemaBrowser />
                  </Drawer>
+
+                 <Drawer
+                    title="会话列表"
+                    placement="left"
+                    onClose={() => setShowSessions(false)}
+                    open={showSessions}
+                    styles={{ body: { padding: 0 }, wrapper: { width: '85%' } }}
+                 >
+                     <SessionList 
+                        sessions={sessions}
+                        currentSessionId={threadId}
+                        onSelectSession={handleSelectSession}
+                        onNewChat={handleNewChat}
+                        onDeleteSession={handleDeleteSession}
+                        onUpdateTitle={handleUpdateTitle}
+                      />
+                 </Drawer>
                  
                  <Drawer
                     title="执行计划追踪"
@@ -528,17 +783,13 @@ const ChatPageContent: React.FC = () => {
                 style={{ height: '100%', background: '#ffffff', borderRadius: 0, boxShadow: 'none', border: 'none' }}
                 onResize={(sizes) => setLeftPanelSize(sizes[0])}
              >
-              {/* Left Sidebar: Schema Browser */}
+              {/* Left Sidebar: Schema Browser / Session List */}
               <Splitter.Panel min="0%" max="40%" style={{borderRight: '1px solid rgba(0,0,0,0.06)'}} size={leftPanelSize}>
-                 <SchemaBrowser 
-                    onCollapse={() => setLeftPanelSize(0)} 
-                    isCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)} 
-                    onExpand={() => setLeftPanelSize('20%')}
-                 />
+                 {renderLeftPanel()}
               </Splitter.Panel>
 
               {/* Middle: Chat */}
-              <Splitter.Panel defaultSize="60%" min="40%">
+              <Splitter.Panel>
                   <ChatWindow 
                     messages={messages}
                     isLoading={isLoading}
@@ -555,22 +806,6 @@ const ChatPageContent: React.FC = () => {
                     isLeftCollapsed={leftPanelSize === 0 || leftPanelSize === '0%' || (typeof leftPanelSize === 'number' && leftPanelSize < 50)}
                     onResetSession={resetSession}
                   />
-              </Splitter.Panel>
-
-              {/* Right: Execution Plan */}
-              <Splitter.Panel defaultSize="20%" min="15%">
-                  <div style={{ height: '100%', padding: 0, background: '#fafafa', borderLeft: '1px solid rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#fff' }}>
-                        <Title level={5} style={{ margin: 0, display: 'flex', alignItems: 'center', fontSize: 15, fontWeight: 600 }}>
-                            <Activity size={18} style={{ marginRight: 8, color: '#1677ff' }} />
-                            执行计划追踪
-                        </Title>
-                      </div>
-                      
-                      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-                        <TaskTimeline tasks={tasks} />
-                      </div>
-                  </div>
               </Splitter.Panel>
           </Splitter>
           )}

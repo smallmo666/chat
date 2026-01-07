@@ -1,13 +1,14 @@
 import json
-import re
 from langchain_core.messages import AIMessage
 from src.workflow.state import AgentState
 from src.core.database import get_query_db
 from src.core.sql_security import is_safe_sql
 from src.workflow.utils.memory_sync import sync_memory
-import asyncio
 from src.core.llm import get_llm
 from langchain_core.prompts import ChatPromptTemplate
+from src.core.config import settings
+from src.core.redis_client import get_redis_client
+import time
 
 # 定义敏感字段列表 (可配置)
 SENSITIVE_FIELDS = {
@@ -204,28 +205,32 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
         # 同步记忆
         await sync_memory(user_id, project_id, user_query, dsl, sql, json_result_str)
         
-        # --- Result Analysis (Zero-Result or Summary) ---
         ai_msg_content = ""
-        
+        download_token = None
         if len(json_result) == 0:
-            # 空结果分析
             print(f"DEBUG: SQL executed successfully but returned 0 rows. SQL: {sql}")
             suggestion = await analyze_empty_result(sql, project_id)
-            ai_msg_content = f"查询执行成功，但未找到任何匹配的数据。\n\n💡 **可能原因分析**: {suggestion}"
-            # 显式返回空列表字符串，确保前端能解析
-            json_result_str = "[]" 
+            ai_msg_content = f"查询执行成功，但未找到任何匹配的数据。 {suggestion}"
+            json_result_str = "[]"
         else:
-            # 结果摘要
             print(f"DEBUG: SQL returned {len(json_result)} rows.")
-            summary = await summarize_results(json_result, project_id)
-            ai_msg_content = f"查询成功，找到 {len(json_result)} 条记录。\n📊 摘要: {summary}"
-        # ------------------------------------------------
-        
+            preview_count = min(len(json_result), settings.PREVIEW_ROW_COUNT)
+            preview = json_result[:preview_count]
+            json_result_str = json.dumps(preview, ensure_ascii=False)
+            ai_msg_content = f"查询成功，找到 {len(json_result)} 条记录。"
+            try:
+                r = get_redis_client()
+                token = f"t2s:v1:download:{project_id}:{str(time.time())}"
+                r.setex(token, settings.DOWNLOAD_TTL, json.dumps({"sql": sql, "project_id": project_id}))
+                download_token = token
+            except Exception as _:
+                download_token = None
         return {
             "results": json_result_str,
             "messages": [AIMessage(content=ai_msg_content)],
             "error": None,
-            "retry_count": 0
+            "retry_count": 0,
+            "download_token": download_token
         }
         
     except Exception as e:

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, Suspense } from 'react';
 import * as antd from 'antd';
 import * as icons from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+const LazyECharts = React.lazy(() => import('echarts-for-react'));
 
 interface ArtifactRendererProps {
     code: string;
@@ -33,7 +33,7 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data, images 
                 React,
                 antd,
                 icons,
-                ReactECharts,
+                ReactECharts: LazyECharts,
                 render,
                 data, // 也将 data 直接暴露给 scope，虽然通常通过 props 传递
                 images
@@ -74,7 +74,9 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data, images 
 
     return (
         <div ref={containerRef} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, marginTop: 16, background: '#fafafa' }}>
-            {Component}
+            <Suspense fallback={<div style={{color:'#999'}}>加载图表组件...</div>}>
+                {Component}
+            </Suspense>
         </div>
     );
 };

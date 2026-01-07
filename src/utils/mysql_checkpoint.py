@@ -4,12 +4,15 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, Checkpoin
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.engine import Engine
 from sqlalchemy import text
+from collections import deque
+from src.core.config import settings
 
 class MySQLSaver(BaseCheckpointSaver):
     def __init__(self, engine: Engine):
         super().__init__()
         self.engine = engine
         self._init_table()
+        self._buffer = deque()
 
     def _init_table(self):
         with self.engine.connect() as conn:
@@ -104,26 +107,15 @@ class MySQLSaver(BaseCheckpointSaver):
         thread_id = config["configurable"]["thread_id"]
         thread_ts = checkpoint["id"]
         parent_ts = config["configurable"].get("thread_ts")
-        
-        with self.engine.connect() as conn:
-            conn.execute(text(
-                """
-                INSERT INTO checkpoints_v2 (thread_id, thread_ts, parent_ts, checkpoint, metadata) 
-                VALUES (:thread_id, :thread_ts, :parent_ts, :checkpoint, :metadata)
-                ON DUPLICATE KEY UPDATE 
-                    checkpoint=VALUES(checkpoint), 
-                    metadata=VALUES(metadata), 
-                    parent_ts=VALUES(parent_ts),
-                    created_at=CURRENT_TIMESTAMP
-                """
-            ), {
-                "thread_id": thread_id,
-                "thread_ts": thread_ts,
-                "parent_ts": parent_ts,
-                "checkpoint": pickle.dumps(checkpoint),
-                "metadata": pickle.dumps(metadata)
-            })
-            conn.commit()
+        self._buffer.append((
+            thread_id,
+            thread_ts,
+            parent_ts,
+            pickle.dumps(checkpoint),
+            pickle.dumps(metadata)
+        ))
+        if len(self._buffer) >= settings.CHECKPOINT_BATCH_SIZE:
+            self._flush_buffer()
         
         return {
             "configurable": {
@@ -131,6 +123,37 @@ class MySQLSaver(BaseCheckpointSaver):
                 "thread_ts": thread_ts,
             }
         }
+
+    def _flush_buffer(self):
+        batch = []
+        while self._buffer and len(batch) < settings.CHECKPOINT_BATCH_SIZE:
+            batch.append(self._buffer.popleft())
+        if not batch:
+            return
+        with self.engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO checkpoints_v2 (thread_id, thread_ts, parent_ts, checkpoint, metadata) 
+                    VALUES (:thread_id, :thread_ts, :parent_ts, :checkpoint, :metadata)
+                    ON DUPLICATE KEY UPDATE 
+                        checkpoint=VALUES(checkpoint), 
+                        metadata=VALUES(metadata), 
+                        parent_ts=VALUES(parent_ts),
+                        created_at=CURRENT_TIMESTAMP
+                    """
+                ),
+                [
+                    {
+                        "thread_id": t_id,
+                        "thread_ts": t_ts,
+                        "parent_ts": p_ts,
+                        "checkpoint": cp,
+                        "metadata": md
+                    } for (t_id, t_ts, p_ts, cp, md) in batch
+                ]
+            )
+            conn.commit()
 
     
     # Async fallbacks

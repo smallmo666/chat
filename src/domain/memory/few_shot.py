@@ -3,6 +3,8 @@ import uuid
 import threading
 from typing import Dict, Any
 
+from src.core.config import settings
+
 class FewShotRetriever:
     """
     基于 ChromaDB 的 Few-Shot 样本检索器。
@@ -16,8 +18,27 @@ class FewShotRetriever:
 
     def _init_vector_db(self):
         try:
-            # 使用持久化客户端，与 ValueSearcher 保持一致
-            self._chroma_client = chromadb.PersistentClient(path="./chroma_db_fewshot")
+            if settings.CHROMA_USE_REMOTE:
+                try:
+                    print(f"Connecting to remote ChromaDB at {settings.CHROMA_SERVER_HOST}:{settings.CHROMA_SERVER_PORT}...")
+                    self._chroma_client = chromadb.HttpClient(
+                        host=settings.CHROMA_SERVER_HOST, 
+                        port=settings.CHROMA_SERVER_PORT
+                    )
+                    # 测试连接
+                    self._chroma_client.heartbeat()
+                    print("Successfully connected to remote ChromaDB.")
+                except Exception as e:
+                    print(f"Warning: Failed to connect to remote ChromaDB ({e}), falling back to EphemeralClient.")
+                    self._chroma_client = chromadb.EphemeralClient()
+            else:
+                # 尝试使用持久化客户端
+                try:
+                    self._chroma_client = chromadb.PersistentClient(path="./chroma_db_fewshot")
+                except Exception as e:
+                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
+                    self._chroma_client = chromadb.EphemeralClient()
+                
             # 每个项目使用独立的 Collection，或者是全局共享的 "common_examples"
             collection_name = f"few_shot_examples_{self.project_id}" if self.project_id else "few_shot_examples_common"
             self._collection = self._chroma_client.get_or_create_collection(name=collection_name)

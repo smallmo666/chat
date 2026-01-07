@@ -45,6 +45,7 @@ dependencies = [
     "pytest>=9.0.2",
     "asyncpg>=0.31.0",
     "faiss-cpu>=1.13.2",
+    "rank-bm25>=0.2.2",
 ]
 
 [tool.uv]

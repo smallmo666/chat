@@ -2,18 +2,27 @@ import asyncio
 import json
 import uuid
 import time
-from typing import AsyncGenerator, Optional
-from fastapi import APIRouter, Depends
+from datetime import datetime
+from typing import AsyncGenerator, Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from src.workflow.graph import create_graph
 from src.core.database import get_app_db
-from src.core.models import AuditLog, User
+from src.core.models import AuditLog, User, Knowledge, Dashboard, ChatSession
 from src.utils.callbacks import UIStreamingCallbackHandler
-from src.api.schemas import ChatRequest
+from src.api.schemas import (
+    ChatRequest, 
+    PythonExecRequest, 
+    SessionListRequest, 
+    SessionHistoryRequest, 
+    SessionDeleteRequest, 
+    SessionUpdateRequest
+)
 # Import auth dependency
 from src.core.security_auth import get_current_active_user
+from sqlmodel import select, desc
 
 router = APIRouter(tags=["chat"])
 
@@ -54,8 +63,13 @@ async def event_generator(
         try:
             graph_app = get_graph()
             
+            # 关键修改: 将 user_id 注入到 configurable 中，供 ClarifyIntent 等节点使用
             config = {
-                "configurable": {"thread_id": thread_id, "project_id": project_id},
+                "configurable": {
+                    "thread_id": thread_id, 
+                    "project_id": project_id,
+                    "user_id": user_id 
+                },
                 "recursion_limit": 50,
                 "callbacks": [UIStreamingCallbackHandler(token_callback)]
             }
@@ -221,6 +235,9 @@ async def event_generator(
                             audit_data["result_summary"] = f"Returned {row_count} rows"
                             if isinstance(json_data, list) and len(json_data) > 0:
                                 await queue.put({"type": "data_export", "content": json_data})
+                            token = state_update.get("download_token")
+                            if token:
+                                await queue.put({"type": "data_download", "content": token})
                         except Exception as e:
                             print(f"Failed to parse results JSON for export: {e}")
 
@@ -383,13 +400,6 @@ async def event_generator(
         yield f"event: {data['type']}\n"
         yield f"data: {json.dumps(data)}\n\n"
 
-from src.domain.sandbox import StatefulSandbox
-from pydantic import BaseModel
-
-class PythonExecRequest(BaseModel):
-    code: str
-    project_id: str
-
 @router.post("/chat/python/execute")
 async def execute_python_code(
     request: PythonExecRequest,
@@ -410,9 +420,6 @@ async def execute_python_code(
     result = await asyncio.to_thread(sandbox.execute, request.code)
     
     return result
-
-from src.core.models import AuditLog, User, Knowledge, Dashboard
-from sqlmodel import select
 
 @router.post("/knowledge")
 async def add_knowledge(
@@ -501,12 +508,152 @@ async def list_dashboards(
         results = session.exec(query).all()
         return results
 
+# --- Session Management Endpoints ---
+
+@router.post("/chat/sessions/list")
+async def list_sessions(
+    request: SessionListRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取当前用户在指定项目下的会话列表。
+    """
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        query = select(ChatSession).where(
+            ChatSession.user_id == current_user.id,
+            ChatSession.project_id == request.project_id,
+            ChatSession.is_active == True
+        ).order_by(desc(ChatSession.updated_at))
+        
+        results = session.exec(query).all()
+        return results
+
+@router.post("/chat/sessions/history")
+async def get_session_history(
+    request: SessionHistoryRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取指定会话的历史消息记录 (从 LangGraph 状态恢复)。
+    """
+    graph_app = get_graph()
+    
+    # 验证 Session 是否属于该用户 (可选，但推荐)
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        chat_session = session.get(ChatSession, request.session_id)
+        if not chat_session or chat_session.user_id != current_user.id:
+             # 如果找不到，或者不属于该用户，返回空或错误
+             # 为了安全，这里不报错，只返回空历史
+             pass 
+
+    # 从 LangGraph 获取状态
+    config = {"configurable": {"thread_id": request.session_id}}
+    try:
+        snapshot = await graph_app.aget_state(config)
+        if not snapshot.values:
+            return []
+            
+        messages = snapshot.values.get("messages", [])
+        
+        # 序列化消息
+        history = []
+        for msg in messages:
+            msg_type = msg.type
+            content = msg.content
+            # 处理特殊类型的消息内容 (如 AIMessage 可能包含 tool_calls)
+            history.append({
+                "type": msg_type,
+                "content": content
+            })
+            
+        return history
+    except Exception as e:
+        print(f"Failed to fetch history for session {request.session_id}: {e}")
+        return []
+
+@router.post("/chat/sessions/delete")
+async def delete_session(
+    request: SessionDeleteRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    软删除会话。
+    """
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        chat_session = session.get(ChatSession, request.session_id)
+        if not chat_session:
+            return {"error": "Session not found"}
+        
+        if chat_session.user_id != current_user.id:
+            return {"error": "Permission denied"}
+            
+        chat_session.is_active = False
+        session.add(chat_session)
+        session.commit()
+        return {"status": "success", "session_id": request.session_id}
+
+@router.post("/chat/sessions/update")
+async def update_session(
+    request: SessionUpdateRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    更新会话标题。
+    """
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        chat_session = session.get(ChatSession, request.session_id)
+        if not chat_session:
+            return {"error": "Session not found"}
+            
+        if chat_session.user_id != current_user.id:
+            return {"error": "Permission denied"}
+            
+        chat_session.title = request.title
+        chat_session.updated_at = datetime.utcnow()
+        session.add(chat_session)
+        session.commit()
+        return {"status": "success", "session_id": request.session_id, "title": request.title}
+
 @router.post("/chat")
 async def chat_endpoint(
     request: ChatRequest,
     current_user: User = Depends(get_current_active_user) # Protected Route
 ):
     thread_id = request.thread_id or str(uuid.uuid4())
+    
+    # Session Management: Upsert Session
+    if request.project_id:
+        app_db = get_app_db()
+        try:
+            with app_db.get_session() as session:
+                chat_session = session.get(ChatSession, thread_id)
+                if not chat_session:
+                    # Create new session
+                    # Auto-generate title from first few words of message
+                    title = request.message[:20] + "..." if len(request.message) > 20 else request.message
+                    if not title.strip():
+                        title = "新会话"
+                        
+                    chat_session = ChatSession(
+                        id=thread_id,
+                        user_id=current_user.id,
+                        project_id=request.project_id,
+                        title=title
+                    )
+                    session.add(chat_session)
+                else:
+                    # Update timestamp
+                    chat_session.updated_at = datetime.utcnow()
+                    session.add(chat_session)
+                session.commit()
+        except Exception as e:
+            print(f"Error managing session: {e}")
+            # Non-blocking, continue chat
+    
     return StreamingResponse(
         event_generator(
             request.message, 

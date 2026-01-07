@@ -5,6 +5,8 @@ from typing import Optional, List
 from sentence_transformers import SentenceTransformer
 import chromadb
 
+from src.core.config import settings
+
 class SemanticCache:
     """
     基于向量相似度的语义缓存。
@@ -13,9 +15,28 @@ class SemanticCache:
     
     def __init__(self, project_id: int = None):
         self.project_id = project_id or "default"
-        # 使用本地持久化
+        
+        # 初始化 ChromaDB 客户端
         try:
-            self.client = chromadb.PersistentClient(path="./chroma_db")
+            if settings.CHROMA_USE_REMOTE:
+                try:
+                    print(f"Connecting to remote ChromaDB at {settings.CHROMA_SERVER_HOST}:{settings.CHROMA_SERVER_PORT}...")
+                    self.client = chromadb.HttpClient(
+                        host=settings.CHROMA_SERVER_HOST,
+                        port=settings.CHROMA_SERVER_PORT
+                    )
+                    self.client.heartbeat()
+                    print("Successfully connected to remote ChromaDB.")
+                except Exception as e:
+                    print(f"Warning: Failed to connect to remote ChromaDB ({e}), falling back to EphemeralClient.")
+                    self.client = chromadb.EphemeralClient()
+            else:
+                try:
+                    self.client = chromadb.PersistentClient(path="./chroma_db")
+                except Exception as e:
+                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
+                    self.client = chromadb.EphemeralClient()
+                
             # 每个 Project 一个 Collection
             collection_name = f"sql_cache_project_{self.project_id}"
             self.collection = self.client.get_or_create_collection(name=collection_name)

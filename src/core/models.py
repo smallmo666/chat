@@ -93,7 +93,7 @@ class DataSource(SQLModel, table=True):
     port: int = Field(..., description="端口号")
     user: str = Field(..., description="数据库用户名")
     password: str = Field(..., description="数据库密码")
-    dbname: str = Field(..., description="数据库名称")
+    dbname: Optional[str] = Field(default=None, description="数据库名称 (可选，若为空则展示所有库)")
     owner_id: Optional[int] = Field(default=None, foreign_key="app_users.id", description="创建者 ID")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
 
@@ -167,3 +167,19 @@ class AuditLog(SQLModel, table=True):
     feedback_comment: Optional[str] = Field(default=None, description="用户反馈评论")
     
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+
+class ChatSession(SQLModel, table=True):
+    """
+    会话模型。
+    管理用户会话元数据。
+    """
+    __tablename__ = "chat_sessions"
+    
+    id: str = Field(primary_key=True, description="会话 ID (Thread ID)")
+    user_id: int = Field(index=True, description="用户 ID")
+    project_id: int = Field(index=True, description="项目 ID")
+    title: str = Field(default="新会话", description="会话标题")
+    is_active: bool = Field(default=True, description="是否活跃 (软删除)")
+    
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")

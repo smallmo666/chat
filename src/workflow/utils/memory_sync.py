@@ -37,17 +37,10 @@ async def sync_memory(user_id: str, project_id: str, user_query: str, dsl: str, 
         except Exception as e:
             print(f"Failed to save RAG memory: {e}")
 
-    # --- REMOVED AUTO SYNC FOR SEMANTIC CACHE & FEW SHOT ---
-    # def sync_semantic_cache(): ...
-    # def sync_few_shot(): ...
-    # -------------------------------------------------------
-
     # Run tasks in thread pool concurrently
     try:
         await asyncio.gather(
             asyncio.to_thread(sync_mem0),
-            # asyncio.to_thread(sync_semantic_cache), # Disabled
-            # asyncio.to_thread(sync_few_shot)        # Disabled
         )
     except Exception as e:
         print(f"Error in memory sync task group: {e}")

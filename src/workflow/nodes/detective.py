@@ -11,7 +11,7 @@ from src.domain.memory.few_shot import get_few_shot_retriever
 class DetectiveResponse(BaseModel):
     is_complex: bool = Field(..., description="Query whether it is complex and needs to be split")
     hypotheses: List[str] = Field(default=[], description="List of hypotheses or sub-questions for complex queries")
-    reasoning: str = Field(..., description="Reasoning behind the decision")
+    reasoning: str = Field(default="No reasoning provided", description="Reasoning behind the decision")
 
 DETECTIVE_PROMPT = """
 你是一个高级数据侦探 (Data Detective)。

@@ -15,8 +15,15 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering clarify_intent_node (Async)")
 
     # 获取用户 ID 和 Project ID
-    user_id = config.get("configurable", {}).get("thread_id", "default_user") if config else "default_user"
-    project_id = config.get("configurable", {}).get("project_id") if config else None
+    configurable = config.get("configurable", {}) if config else {}
+    thread_id = configurable.get("thread_id", "default_thread")
+    project_id = configurable.get("project_id")
+    
+    # 获取真实 User ID (优先使用显式传入的 user_id)
+    # 之前错误地使用了 thread_id 作为 user_id，导致记忆无法跨会话共享
+    raw_user_id = configurable.get("user_id")
+    # Mem0 需要 string 类型的 user_id
+    user_id = str(raw_user_id) if raw_user_id else thread_id
 
     llm = get_llm(node_name="ClarifyIntent", project_id=project_id)
     
@@ -33,7 +40,19 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
             memory_client = get_memory()
             # 检索原始 Query 以及关键词
             mem_results = memory_client.search(user_id=user_id, query=last_msg, limit=5)
-            return [m["memory"] for m in mem_results] if mem_results else []
+            
+            # Robust extraction of memory content
+            if isinstance(mem_results, dict) and "results" in mem_results:
+                 mem_results = mem_results["results"]
+            
+            final_results = []
+            if isinstance(mem_results, list):
+                for m in mem_results:
+                    if isinstance(m, dict):
+                        final_results.append(m.get("memory", str(m)))
+                    else:
+                        final_results.append(str(m))
+            return final_results
         except Exception as e:
             print(f"Clarify: Failed to retrieve memory: {e}")
             return []

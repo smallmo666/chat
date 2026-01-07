@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Input, Tree, Spin } from 'antd';
-import { TableOutlined, SearchOutlined, ColumnHeightOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { TableOutlined, SearchOutlined, ColumnHeightOutlined, MenuUnfoldOutlined, MenuFoldOutlined, DatabaseOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
-import type { TreeDataNode } from '../types';
+import type { TreeDataNode, TableSchema } from '../types';
 import { useSchema } from '../context/SchemaContext';
 
 const { DirectoryTree } = Tree;
@@ -21,41 +21,128 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
     const [autoExpandParent, setAutoExpandParent] = useState<boolean>(true);
 
     useEffect(() => {
-        // Transform filtered tables to TreeData
+        // Transform filtered tables to TreeData with Database Grouping
         const lowerSearch = tableSearch.toLowerCase();
         
-        const nodes: TreeDataNode[] = dbTables
-          .filter(t => {
-              // Search in table name or comment
-              return t.name.toLowerCase().includes(lowerSearch) || 
-                     (t.comment && t.comment.toLowerCase().includes(lowerSearch));
-          })
-          .map(t => {
-              return {
-                  title: (
-                      <span style={{fontSize: 14}}>
-                          <span style={{fontWeight: 500}}>{t.name}</span>
-                          {t.comment && <span style={{color: '#888', marginLeft: 6}}>({t.comment})</span>}
-                      </span>
-                  ),
-                  key: t.name,
-                  icon: <TableOutlined />,
-                  children: t.columns.map(col => ({
-                      title: (
-                          <span style={{fontSize: 13, color: '#555'}}>
-                              <span style={{color: '#1677ff'}}>{col.name}</span>
-                              <span style={{color: '#999', margin: '0 4px'}}>{col.type}</span>
-                              {col.comment && <span style={{color: '#666'}}>- {col.comment}</span>}
-                          </span>
-                      ),
-                      key: `${t.name}.${col.name}`,
-                      isLeaf: true,
-                      icon: <ColumnHeightOutlined style={{fontSize: 11}} />
-                  }))
-              };
-          });
+        // 1. Filter Tables
+        const filteredTables = dbTables.filter(t => {
+            // Search in table name or comment
+            return t.name.toLowerCase().includes(lowerSearch) || 
+                   (t.comment && t.comment.toLowerCase().includes(lowerSearch));
+        });
+
+        // 2. Group by Database
+        const dbGroups: Record<string, TableSchema[]> = {};
+        
+        filteredTables.forEach(t => {
+            const parts = t.name.split('.');
+            let dbName = 'Default';
+            let tableName = t.name;
+            
+            // If name format is "db.table", group by db
+            if (parts.length > 1) {
+                dbName = parts[0];
+                tableName = parts.slice(1).join('.'); // Handle cases with multiple dots if any
+            }
+            
+            if (!dbGroups[dbName]) {
+                dbGroups[dbName] = [];
+            }
+            
+            // Store with adjusted name for display, but keep original for keys if needed
+            // Actually, we should construct a new object to avoid mutating state
+            dbGroups[dbName].push({
+                ...t,
+                name: tableName, // Display name (without db prefix)
+                // We can store original name in a custom property if needed, but key handles it
+            });
+        });
+
+        // 3. Build Tree Nodes
+        const nodes: TreeDataNode[] = Object.entries(dbGroups).map(([dbName, tables]) => {
+            // If it's the "Default" group and we only have one group, maybe flatten? 
+            // But for consistency, let's keep the structure if there are mixed types.
+            // However, if ALL tables are Default (no prefix), we might want to skip the root level?
+            // Let's stick to strict grouping for now.
+            
+            return {
+                title: (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 8 }}>
+                        <Tooltip title={dbName} placement="topLeft" mouseEnterDelay={0.3}>
+                            <span style={{ fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8, fontSize: 13 }}>
+                                {dbName}
+                            </span>
+                        </Tooltip>
+                        <span style={{ color: '#999', fontSize: 11, flexShrink: 0, background: '#f5f5f5', padding: '0 5px', borderRadius: 8, minWidth: 18, textAlign: 'center' }}>
+                            {tables.length}
+                        </span>
+                    </div>
+                ),
+                key: `db:${dbName}`,
+                icon: <DatabaseOutlined style={{color: '#8c8c8c'}} />,
+                children: tables.map(t => {
+                    // Reconstruct full key for uniqueness: "dbName.tableName"
+                    const fullKey = dbName === 'Default' ? t.name : `${dbName}.${t.name}`;
+                    
+                    return {
+                        title: (
+                            <div style={{ display: 'flex', alignItems: 'center', width: '100%', overflow: 'hidden' }}>
+                                <Tooltip title={t.name} placement="topLeft" mouseEnterDelay={0.3}>
+                                    <span style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '75%' }}>
+                                        {t.name}
+                                    </span>
+                                </Tooltip>
+                                {t.comment && (
+                                    <Tooltip title={t.comment} placement="topLeft" mouseEnterDelay={0.3}>
+                                        <span style={{ color: '#888', marginLeft: 4, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                                            ({t.comment})
+                                        </span>
+                                    </Tooltip>
+                                )}
+                            </div>
+                        ),
+                        key: fullKey,
+                        icon: <TableOutlined style={{color: '#1677ff'}} />,
+                        children: t.columns.map(col => ({
+                            title: (
+                                <div style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#555', overflow: 'hidden', width: '100%' }}>
+                                    <Tooltip title={col.name} placement="topLeft" mouseEnterDelay={0.3}>
+                                        <span style={{ color: '#1677ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '60%', fontSize: 12 }}>
+                                            {col.name}
+                                        </span>
+                                    </Tooltip>
+                                    <span style={{ color: '#999', margin: '0 3px', flexShrink: 0, fontSize: 11 }}>{col.type}</span>
+                                    {col.comment && (
+                                        <Tooltip title={col.comment} placement="topLeft" mouseEnterDelay={0.3}>
+                                            <span style={{ color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, fontSize: 11 }}>
+                                                - {col.comment}
+                                            </span>
+                                        </Tooltip>
+                                    )}
+                                </div>
+                            ),
+                            key: `${fullKey}.${col.name}`,
+                            isLeaf: true,
+                            icon: <ColumnHeightOutlined style={{fontSize: 11}} />
+                        }))
+                    };
+                })
+            };
+        });
           
         setTreeData(nodes);
+        
+        // Auto expand if searching
+        if (tableSearch) {
+             const allKeys: string[] = [];
+             nodes.forEach(db => {
+                 allKeys.push(db.key);
+                 if (db.children) {
+                     db.children.forEach(tbl => allKeys.push(tbl.key));
+                 }
+             });
+             setExpandedKeys(allKeys);
+        }
     }, [dbTables, tableSearch]);
 
     // Update expanded keys when search changes or tables are selected via agent
@@ -78,12 +165,12 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
     return (
         <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
             <div style={{
-                padding: '12px', 
+                padding: '8px 12px', 
                 borderBottom: '1px solid #f0f0f0', 
                 background: '#fff',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 8
+                gap: 6
             }}>
                 {/* Header Title Removed to save space */}
                 <Input 
@@ -93,7 +180,8 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                     onChange={e => setTableSearch(e.target.value)}
                     allowClear
                     variant="filled"
-                    style={{ borderRadius: 8 }}
+                    style={{ borderRadius: 6, height: 32 }}
+                    size="small"
                 />
             </div>
             <div style={{flex: 1, overflow: 'hidden', padding: '8px 0', position: 'relative'}}>
@@ -103,9 +191,11 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                         justifyContent: 'center', 
                         alignItems: 'center', 
                         height: '100%',
-                        width: '100%'
+                        width: '100%',
+                        flexDirection: 'column'
                     }}>
-                        <Spin tip="正在加载表结构..." />
+                        <Spin size="large" />
+                        <div style={{marginTop: 10, color: '#999'}}>正在加载表结构...</div>
                     </div>
                 ) : (
                     <div style={{height: '100%', overflow: 'auto'}}>
@@ -113,6 +203,7 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                         checkable
                         multiple
                         draggable // Enable draggable
+                        blockNode // Ensure nodes take full width
                         onDragStart={(info) => {
                             // Store dragged node info in dataTransfer
                             // We only want to drag table names or column names as text
@@ -143,6 +234,9 @@ const SchemaBrowser: React.FC<SchemaBrowserProps> = ({ onExpand, isCollapsed }) 
                         autoExpandParent={autoExpandParent}
                         icon={(props: any) => {
                             if (props.isLeaf) return <ColumnHeightOutlined style={{fontSize: 11, color: '#8c8c8c'}} />;
+                            if (props.data && props.data.children) return <DatabaseOutlined style={{color: '#8c8c8c'}} />; // Heuristic for DB node
+                            // Actually treeData already has icons, this prop might override them or be fallback.
+                            // DirectoryTree uses node icon if present.
                             return <TableOutlined style={{color: '#1677ff'}} />;
                         }}
                     />

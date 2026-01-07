@@ -44,11 +44,10 @@ const DataSourcePage = () => {
         ? `/api/datasources/${editingId}`
         : '/api/datasources';
       
-      let res;
       if (editingId) {
-        res = await api.put(url, values);
+        await api.put(url, values);
       } else {
-        res = await api.post(url, values);
+        await api.post(url, values);
       }
 
       message.success(editingId ? '更新成功' : '创建成功');
@@ -91,23 +90,30 @@ const DataSourcePage = () => {
   };
 
   const columns = [
-    { title: 'ID', dataIndex: 'id', key: 'id' },
-    { title: '名称', dataIndex: 'name', key: 'name' },
-    { title: '类型', dataIndex: 'type', key: 'type' },
-    { title: '主机', dataIndex: 'host', key: 'host' },
-    { title: '端口', dataIndex: 'port', key: 'port' },
-    { title: '数据库', dataIndex: 'dbname', key: 'dbname' },
-    { title: '用户名', dataIndex: 'user', key: 'user' },
+    { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 200 },
+    { title: '类型', dataIndex: 'type', key: 'type', width: 120 },
+    { title: '主机', dataIndex: 'host', key: 'host', width: 200 },
+    { title: '端口', dataIndex: 'port', key: 'port', width: 100 },
+    { 
+      title: '数据库', 
+      dataIndex: 'dbname', 
+      key: 'dbname',
+      width: 200,
+      render: (text: string) => text || <span style={{ color: '#999', fontStyle: 'italic' }}>All Databases</span>
+    },
+    { title: '用户名', dataIndex: 'user', key: 'user', width: 150 },
     {
       title: '操作',
       key: 'action',
+      width: 180,
       render: (_: any, record: DataSource) => (
-        <>
-            <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+        <div style={{ display: 'flex', gap: 8 }}>
+            <Button type="link" size="small" onClick={() => handleEdit(record)} style={{ padding: 0 }}>编辑</Button>
             <Popconfirm title="确认删除?" onConfirm={() => handleDelete(record.id)}>
-              <Button type="link" danger icon={<DeleteOutlined />}>删除</Button>
+              <Button type="link" danger size="small" style={{ padding: 0 }}>删除</Button>
             </Popconfirm>
-        </>
+        </div>
       ),
     },
   ];
@@ -116,7 +122,7 @@ const DataSourcePage = () => {
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <h2>数据源管理</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+        <Button type="primary" onClick={() => {
             setEditingId(null);
             form.resetFields();
             setIsModalOpen(true);
@@ -124,7 +130,14 @@ const DataSourcePage = () => {
           新增数据源
         </Button>
       </div>
-      <Table columns={columns} dataSource={data} rowKey="id" loading={loading} />
+      <Table 
+        columns={columns} 
+        dataSource={data} 
+        rowKey="id" 
+        loading={loading} 
+        scroll={{ x: 1200 }} 
+        pagination={{ pageSize: 10 }}
+      />
 
       <Modal 
         title={editingId ? "编辑数据源" : "新增数据源"}
@@ -162,8 +175,8 @@ const DataSourcePage = () => {
           <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password placeholder="******" />
           </Form.Item>
-          <Form.Item name="dbname" label="数据库名" rules={[{ required: true, message: '请输入数据库名' }]}>
-            <Input placeholder="postgres" />
+          <Form.Item name="dbname" label="数据库名" rules={[{ required: false, message: '请输入数据库名' }]}>
+            <Input placeholder="如果不填则连接默认库并展示所有数据库" />
           </Form.Item>
         </Form>
       </Modal>
