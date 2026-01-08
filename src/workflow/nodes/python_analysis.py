@@ -64,6 +64,9 @@ async def python_analysis_node(state: AgentState, config: dict = None) -> dict:
             if not sql_results:
                  return None, None, None, "SQL Results is None or empty string"
             
+            if sql_results.strip() == "[]":
+                 return None, None, None, "数据为空 (Empty JSON List)，无法进行分析"
+            
             # Handle case where results might be a string representation of an error
             if sql_results.startswith("SQL 执行失败"):
                  return None, None, None, f"Upstream SQL Error: {sql_results}"

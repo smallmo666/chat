@@ -13,94 +13,10 @@
 
 系统采用分层微服务架构，以 **LangGraph Swarm** 为核心编排引擎，向下连接多源异构数据库，向上通过 **SSE (Server-Sent Events)** 提供实时流式交互。
 
-```mermaid
-graph TD
-    %% 接入层
-    subgraph Client [💻 接入层 (Access Layer)]
-        Web[React Frontend]
-        CLI[Command Line]
-    end
 
-    %% API 网关
-    subgraph Gateway [🚪 API 网关]
-        FastAPI[FastAPI Server]
-        SSE[SSE Streamer]
-        Auth[JWT Auth]
-    end
 
-    %% 智能编排层 (LangGraph Swarm)
-    subgraph Orchestration [🧠 智能编排层 (LangGraph Swarm)]
-        Supervisor[👨‍✈️ Supervisor (调度中心)]
-        Planner[📝 Planner (规划师)]
-        CacheCheck[🧠 Cache Check]
-        DataDetective[🕵️‍♂️ Data Detective (侦探)]
-        
-        subgraph SQL_Pipeline [SQL 流水线]
-            Clarify[🗣️ Clarify Intent]
-            SelectTables[📋 Select Tables]
-            GenDSL[🛠️ Generate DSL]
-            DSL2SQL[🔄 DSL to SQL]
-            ExecuteSQL[🚀 Execute SQL]
-            CorrectSQL[🔧 Correct SQL]
-        end
-        
-        subgraph Analysis_Pipeline [分析流水线]
-            Insight[💡 Insight Miner]
-            PyAnalysis[📊 Python Analyst]
-            Viz[📈 Visualization]
-            TableQA[💬 Table QA]
-        end
-        
-        subgraph UX_Pipeline [体验流水线]
-            Artist[🎨 UI Artist]
-        end
-        
-        CacheCheck -->|Miss| DataDetective
-        CacheCheck -->|Hit| Supervisor
-        DataDetective --> Planner
-        Planner --> Supervisor
-        
-        Supervisor --> Clarify & SelectTables & GenDSL & DSL2SQL & ExecuteSQL & TableQA & Viz & PyAnalysis & Insight & Artist
-        
-        ExecuteSQL -->|Error| CorrectSQL
-        CorrectSQL --> ExecuteSQL
-        
-        Clarify & SelectTables & GenDSL & DSL2SQL & ExecuteSQL & TableQA & Viz & PyAnalysis & Insight & Artist --> Supervisor
-    end
+![System Architecture](docs/architecture.svg)
 
-    %% 核心能力层
-    subgraph Core [⚙️ 核心能力层 (Core Capabilities)]
-        RAG[📚 Schema RAG (向量检索)]
-        Sandbox[📦 Python Sandbox (安全沙箱)]
-        SemanticCache[🧠 Semantic Cache (语义缓存)]
-        Privacy[🛡️ Privacy Filter (隐私脱敏)]
-    end
-
-    %% 数据层
-    subgraph Data [💾 数据基础设施]
-        MetaData[(MySQL/SQLite Metadata)]
-        BusinessDB[(Business Database)]
-        VectorDB[(FAISS VectorDB)]
-        Redis[(Redis Cache)]
-    end
-
-    %% 连线关系
-    Client <-->|HTTP/SSE| Gateway
-    Gateway <-->|Invoke| Orchestration
-    
-    Orchestration <--> SemanticCache
-    Orchestration <--> RAG
-    
-    ExecuteSQL -->|Query| BusinessDB
-    PyAnalysis <--> Sandbox
-    Sandbox -->|Process| BusinessDB
-    
-    BusinessDB --> Privacy --> Orchestration
-    
-    style Supervisor fill:#ff9900,stroke:#333,stroke-width:2px
-    style BusinessDB fill:#336699,stroke:#333,stroke-width:2px
-    style Sandbox fill:#66cc66,stroke:#333,stroke-width:2px
-```
 
 ### 🧩 核心模块职责
 

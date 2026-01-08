@@ -11,6 +11,8 @@ from src.domain.knowledge.glossary import get_glossary_retriever
 BASE_SYSTEM_PROMPT = """
 你是一个 DSL 生成器。你的任务是将用户的最新查询意图转换为严格的 JSON DSL 格式，该格式将用于生成标准 SQL。
 
+注意：目标数据库为 PostgreSQL。请使用 PostgreSQL 方言的日期/时间语法与函数（例如：current_date、interval、date_trunc、extract），不要使用 MySQL 专有函数（如 CURDATE、DATE_SUB、DATE_FORMAT）。
+
 数据库 Schema:
 {schema_info}
 
@@ -69,16 +71,22 @@ DSL 示例:
 
 规则:
 1. 仅返回有效的 JSON 字符串。不要包含 Markdown。
-2. 严格遵循 DSL 规范，不要编造字段。
+2. 严格遵循 DSL 规范，不要编造字段；只能使用【relevant_schema】中呈现的表与列。
 3. 如果用户查询包含与 [实体链接建议] 匹配的值，你必须使用建议中的精确值。
 4. "joins" 数组用于多表查询。如果只涉及单表，忽略此字段。
 5. "columns" 如果为空或未指定，默认为 SELECT * (但尽量明确列出)。
 6. 优先参考 [业务术语定义] 来构建 WHERE 条件或选择字段。
+7. JOIN 的 on 条件必须使用真实存在的列。你可以根据候选关联键（列名相似、*_id 命名、类型匹配）选择 ON；避免编造不存在的字段。一旦不确定，请减少 JOIN 并返回单表查询或请求澄清。
+8. 若定义了列别名 (alias)，请在 order_by/group_by 等引用时优先使用该 alias。
+9. 仅返回单个顶层 JSON 对象；如果需要多查询，请选择对用户问题最关键的单查询输出。严禁输出多个并列的 JSON 对象或数组。
+10. 在涉及日期范围与按月统计时，优先使用：date_trunc('month', 列名) 及 current_date - interval 'N months' 等 PostgreSQL 语法。
 """
 
 async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering generate_dsl_node (Async)")
     try:
+        if state.get("interrupt_pending"):
+            return {"messages": [], "error": None}
         project_id = config.get("configurable", {}).get("project_id") if config else None
         llm = get_llm(node_name="GenerateDSL", project_id=project_id)
         

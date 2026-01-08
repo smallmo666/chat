@@ -85,15 +85,32 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
         print("DEBUG: CorrectSQL - Detected Column/Field error, initiating Schema Probe...")
         try:
             # 尝试从错误信息或 SQL 中提取表名
-            # 简单的正则提取，假设 FROM table_name 或 JOIN table_name
-            # 这只是一个简单的启发式
-            potential_tables = re.findall(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)', wrong_sql, re.IGNORECASE)
+            # 改进正则以支持 schema.table 或 db.table 格式
+            potential_tables = re.findall(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)', wrong_sql, re.IGNORECASE)
             
             if potential_tables:
                 print(f"DEBUG: Probing tables: {potential_tables}")
-                # 使用 query_db 的 inspect_schema 实时获取这些表的最新结构
-                # inspect_schema 是同步的，需要在 thread 中运行
-                probe_config = {"tables": list(set(potential_tables))} # 去重
+                # 处理 schema.table 格式，只保留 table 部分用于 inspect_schema (假设 inspect_schema 会处理 db 上下文，或者我们需要传递完整名)
+                # QueryDB.inspect_schema 接受 "tables" 列表。
+                # 如果是 db.table，我们可能需要解析出 db，但 inspect_schema 的 interface 是 tables list。
+                # 现在的 inspect_schema 逻辑比较复杂，通常它会在所有库里找这些表。
+                # 所以我们只需要传递表名（去掉前缀），或者保留前缀看它是否支持。
+                # 安全起见，传递纯表名。
+                
+                clean_tables = []
+                target_dbs = set()
+                for t in potential_tables:
+                    if "." in t:
+                        parts = t.split(".")
+                        target_dbs.add(parts[0])
+                        clean_tables.append(parts[1])
+                    else:
+                        clean_tables.append(t)
+                
+                probe_config = {"tables": list(set(clean_tables))} # 去重
+                if target_dbs:
+                    probe_config["databases"] = list(target_dbs)
+                    print(f"DEBUG: Probing databases: {target_dbs}")
                 
                 realtime_schema_json = await asyncio.to_thread(query_db.inspect_schema, probe_config)
                 
@@ -210,6 +227,36 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
             return {
                 "retry_count": retry_count + 1,
                 "error": "Auto-corrected SQL was rejected by security policy."
+            }
+        
+        # 占位符防护：若包含演示/占位内容，改为澄清交互而非直接执行
+        def _looks_like_placeholder(sql_text: str) -> bool:
+            s = sql_text.lower()
+            return ("your_table_name" in s) or ("placeholder" in s) or ("示例" in s)
+        if _looks_like_placeholder(fixed_sql):
+            options = []
+            try:
+                if probed_schema_dict:
+                    options = list(sorted(probed_schema_dict.keys()))[:20]
+                else:
+                    # 回退检索：从 RAG 获取若干候选表名
+                    searcher = get_schema_searcher(project_id)
+                    rag = searcher.search_relevant_tables(wrong_sql or "tables", limit=10)
+                    # rag 可能是字符串或结构化，简化提取表名
+                    import re as _re
+                    options = list(dict.fromkeys(_re.findall(r'[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+', rag)))[:20]
+            except Exception as _:
+                pass
+            payload = {
+                "status": "AMBIGUOUS",
+                "question": "检测到修复后的 SQL 含占位符，请选择正确的目标表：",
+                "type": "single",
+                "options": options or []
+            }
+            return {
+                "intent_clear": False,
+                "messages": [AIMessage(content=json.dumps(payload, ensure_ascii=False))],
+                "retry_count": retry_count + 1
             }
 
         return {

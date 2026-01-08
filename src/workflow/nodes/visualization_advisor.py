@@ -72,6 +72,11 @@ async def visualization_advisor_node(state: AgentState, config: dict = None) -> 
             
     results_str = state.get("results", "[]")
     
+    # 快速空数据检查 (防御性编程)
+    if not results_str or results_str.strip() == "[]":
+        print("VizAdvisor: Empty data detected (pre-check), skipping.")
+        return {"visualization": None}
+    
     try:
         data = json.loads(results_str)
         if not data or not isinstance(data, list):

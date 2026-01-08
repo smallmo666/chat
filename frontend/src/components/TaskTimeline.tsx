@@ -1,6 +1,6 @@
 import React from 'react';
-import { Tag, Typography, Timeline } from 'antd';
-import { CheckCircleOutlined, ClockCircleOutlined, SyncOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { Tag, Typography, Steps, theme } from 'antd';
+import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleFilled } from '@ant-design/icons';
 import type { TaskItem } from '../types';
 
 const { Text } = Typography;
@@ -10,82 +10,64 @@ interface TaskTimelineProps {
 }
 
 const TaskTimeline: React.FC<TaskTimelineProps> = ({ tasks }) => {
+    const { token } = theme.useToken();
+
     return (
-        <div style={{ paddingLeft: 4 }}>
-            <Timeline
+        <div style={{ padding: '8px 4px' }}>
+            <Steps
+                direction="vertical"
+                size="small"
+                current={tasks.findIndex(t => t.status === 'process')}
                 items={tasks.map((task, index) => {
-                    let dot;
-                    let color = 'gray';
-                    
+                    let status: 'wait' | 'process' | 'finish' | 'error' = 'wait';
+                    let icon;
+
                     if (task.status === 'process') {
-                        dot = <SyncOutlined spin style={{ fontSize: 16, color: '#1677ff' }} />;
-                        color = 'blue';
+                        status = 'process';
+                        icon = <LoadingOutlined style={{ color: token.colorPrimary }} />;
                     } else if (task.status === 'finish') {
-                        dot = <CheckCircleOutlined style={{ fontSize: 16, color: '#52c41a' }} />;
-                        color = 'green';
+                        status = 'finish';
+                        icon = <CheckCircleFilled style={{ color: token.colorSuccess }} />;
                     } else if (task.status === 'error') {
-                        dot = <CloseCircleOutlined style={{ fontSize: 16, color: '#ff4d4f' }} />;
-                        color = 'red';
+                        status = 'error';
+                        icon = <CloseCircleFilled style={{ color: token.colorError }} />;
                     } else {
-                        dot = <ClockCircleOutlined style={{ fontSize: 16, color: '#d9d9d9' }} />;
-                        color = 'gray';
+                        status = 'wait';
+                        icon = <ClockCircleFilled style={{ color: token.colorTextQuaternary }} />;
                     }
 
                     return {
-                        color: color,
-                        dot: dot, // dot is deprecated but icon is the replacement, let's try icon first or fallback
-                        // Ant Design 5.x: use `icon` instead of `dot` if possible, but `TimelineItemProps` might still use `dot` in some versions.
-                        // The warning says: `items.dot` is deprecated. Please use `items.icon` instead.
-                        icon: dot, 
-                        
-                        // The warning says: `items.children` is deprecated. Please use `items.content` instead.
-                        children: undefined,
-                        label: undefined, // If using label layout
-                        content: (
-                            <div style={{ paddingBottom: 16 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                                    <Text strong style={{ 
-                                        color: task.status === 'pending' ? '#999' : '#333',
-                                        fontSize: 14
-                                    }}>
-                                        {task.title}
-                                    </Text>
-                                    {task.duration !== undefined && (
-                                        <Tag bordered={false} style={{ margin: 0, fontSize: 11, color: '#888', background: '#f5f5f5' }}>
-                                            {(task.duration / 1000).toFixed(2)}s
-                                        </Tag>
-                                    )}
-                                </div>
-                                
-                                {/* Description / Result Summary */}
-                                {task.description && (
-                                     <div style={{ fontSize: 13, color: '#666', marginBottom: 6, lineHeight: 1.5 }}>
-                                         {task.description}
-                                     </div>
-                                )}
-
-                                {/* Thinking Logs */}
-                                {task.status === 'process' && task.logs && task.logs.length > 0 && (
-                                    <div style={{ 
-                                        background: '#f9f9f9', 
-                                        padding: '8px 12px', 
-                                        borderRadius: 6, 
-                                        fontSize: 12, 
-                                        color: '#666',
-                                        fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-                                        maxHeight: 150,
-                                        overflowY: 'auto',
-                                        border: '1px solid #f0f0f0',
-                                        marginTop: 8
-                                    }}>
-                                        {task.logs.map((log, i) => (
-                                            <div key={i} style={{ marginBottom: 2 }}>{log}</div>
-                                        ))}
-                                        <div id={`log-end-${index}`} />
-                                    </div>
+                        title: (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                <Text style={{ 
+                                    fontSize: 14, 
+                                    fontWeight: task.status === 'process' ? 500 : 400,
+                                    color: task.status === 'pending' ? token.colorTextQuaternary : token.colorText
+                                }}>
+                                    {task.title}
+                                </Text>
+                                {task.duration !== undefined && (
+                                    <Tag bordered={false} style={{ margin: 0, fontSize: 11, color: token.colorTextSecondary }}>
+                                        {(task.duration / 1000).toFixed(2)}s
+                                    </Tag>
                                 )}
                             </div>
-                        )
+                        ),
+                        description: task.description ? (
+                            <div style={{ 
+                                marginTop: 4, 
+                                fontSize: 13, 
+                                color: token.colorTextSecondary,
+                                lineHeight: 1.5,
+                                background: task.status === 'process' ? token.colorFillAlter : 'transparent',
+                                padding: task.status === 'process' ? '4px 8px' : 0,
+                                borderRadius: 4
+                            }}>
+                                {task.description}
+                            </div>
+                        ) : null,
+                        status: status,
+                        icon: icon
                     };
                 })}
             />

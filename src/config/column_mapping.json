@@ -1,0 +1,4 @@
+{
+  "orders.itemcode": "orders.product_code",
+  "orders.txndate": "orders.txn_date"
+}

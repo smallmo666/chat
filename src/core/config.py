@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW: int = Field(default=60, env="RATE_LIMIT_WINDOW")
     RATE_LIMIT_MAX_REQUESTS: int = Field(default=120, env="RATE_LIMIT_MAX_REQUESTS")
     ENABLE_SCHEMA_BACKGROUND_INDEX: bool = Field(default=True, env="ENABLE_SCHEMA_BACKGROUND_INDEX")
+    DEFAULT_QUERY_SCHEMA: str = Field(default="", env="DEFAULT_QUERY_SCHEMA")
 
     class Config:
         env_file = ".env"

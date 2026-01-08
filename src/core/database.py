@@ -413,8 +413,24 @@ class QueryDatabase:
                                 db_name = candidate_val
                                 break
                 if db_name:
-                    print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
-                    target_engine = self._get_engine_for_db(db_name)
+                    # PostgreSQL: 识别系统 schema，避免误路由为数据库
+                    if self.type == "postgresql":
+                        sys_schemas = {"information_schema", "pg_catalog", "pg_toast", "pg_temp_1", "pg_toast_temp_1"}
+                        if db_name.lower() in sys_schemas:
+                            print(f"DEBUG: Routing(sqlglot) - Detected system schema '{db_name}', skip DB routing")
+                            db_name = None
+                        else:
+                            # 仅当前缀属于真实数据库名单时才路由
+                            try:
+                                available_dbs = set(self._get_databases())
+                                if db_name not in available_dbs:
+                                    print(f"DEBUG: Routing(sqlglot) - Prefix '{db_name}' not a database, treat as schema")
+                                    db_name = None
+                            except Exception as _:
+                                db_name = None
+                    if db_name:
+                        print(f"DEBUG: Routing(sqlglot) - Target database: {db_name}")
+                        target_engine = self._get_engine_for_db(db_name)
                     # Precheck columns before modify query
                     if 'ast' in locals():
                         precheck_msg = _precheck_columns(ast, db_name)
@@ -424,16 +440,17 @@ class QueryDatabase:
                                 "json": None,
                                 "error": precheck_msg
                             }
-                    def strip_db(sql: str, db: str) -> str:
-                        patterns = [
-                            rf'\b{re.escape(db)}\.',          # 无引号 db.
-                            rf'"{re.escape(db)}"\.',           # PostgreSQL "db".
-                            rf'`{re.escape(db)}`\.',           # MySQL `db`.
-                        ]
-                        for p in patterns:
-                            sql = re.sub(p, '', sql)
-                        return sql
-                    modified_query = strip_db(query, db_name)
+                    if db_name:
+                        def strip_db(sql: str, db: str) -> str:
+                            patterns = [
+                                rf'\b{re.escape(db)}\.',          # 无引号 db.
+                                rf'"{re.escape(db)}"\.',           # PostgreSQL "db".
+                                rf'`{re.escape(db)}`\.',           # MySQL `db`.
+                            ]
+                            for p in patterns:
+                                sql = re.sub(p, '', sql)
+                            return sql
+                        modified_query = strip_db(query, db_name)
             except Exception as e:
                 print(f"sqlglot parse failed, fallback to default routing: {e}")
                 if has_prefix:

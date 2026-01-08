@@ -152,6 +152,15 @@ class SchemaSearcher:
             except Exception as e:
                 print(f"ERROR: Failed to index schema: {e}")
 
+    def _get_schema(self) -> dict:
+        """
+        获取全量 Schema 元数据。
+        如果尚未索引，则触发索引构建。
+        """
+        if not self.all_table_metadata:
+            self.index_schema(force=False)
+        return self.all_table_metadata
+
     def search_candidate_tables(self, query: str, limit: int = 5) -> list[dict]:
         """
         根据查询返回候选表列表（结构化数据）。

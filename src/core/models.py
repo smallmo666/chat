@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 from sqlmodel import Field, SQLModel, JSON
+from sqlalchemy import Text
 
 # --- Phase 10: Multi-Tenancy Models ---
 
@@ -151,7 +152,7 @@ class AuditLog(SQLModel, table=True):
     session_id: str = Field(index=True, description="会话 ID")
     user_query: str = Field(..., description="用户查询内容")
     plan: Optional[dict] = Field(default=None, sa_type=JSON, description="执行计划快照")
-    executed_sql: Optional[str] = Field(None, description="执行的 SQL 语句")
+    executed_sql: Optional[str] = Field(None, sa_type=Text, description="执行的 SQL 语句")
     generated_dsl: Optional[str] = Field(None, description="生成的 DSL (JSON)") 
     result_summary: Optional[str] = Field(None, description="结果摘要或状态")
     duration_ms: int = Field(default=0, description="执行耗时 (毫秒)")

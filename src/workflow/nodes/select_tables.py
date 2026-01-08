@@ -13,6 +13,8 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
     如果存在用户手动选择的表，优先使用。
     """
     print("DEBUG: Entering select_tables_node (Async)")
+    if state.get("interrupt_pending"):
+        return {"intent_clear": False}
     
     project_id = config.get("configurable", {}).get("project_id") if config else None
     
@@ -106,7 +108,7 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
             "1. 包含用户查询所需字段的表。\n"
             "2. 如果涉及多表关联，必须选上连接表 (Join Table) 或中间表。\n"
             "3. 如果不确定，可以多选，但不要选明显无关的表。\n"
-            "4. **务必进行连通性检查**：选出的表必须能通过外键连接起来。\n"
+            "4. **优先同一数据库内的表**：避免跨库关联；如确有跨库需求，请拆分查询或后续引入映射。\n"
             "5. 如果存在多个表都能满足查询（例如 'sales_orders' 和 'purchase_orders'），且你不确定用户指的是哪一个，请返回状态 'AMBIGUOUS' 并提供选项。\n\n"
             "请先进行思考 (Chain of Thought)，分析查询需求和表之间的关系，然后再给出最终选择。\n"
             "输出 JSON 格式 (两种情况):\n"
@@ -242,6 +244,16 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
                             print(f"Warning: Could not find path between {root} and {target}")
                 
                 selected_names = list(final_selected)
+
+            try:
+                dbs = [t.split('.', 1)[0] if '.' in t else '' for t in selected_names]
+                from collections import Counter
+                cnt = Counter(dbs)
+                pivot_db = cnt.most_common(1)[0][0] if cnt else ''
+                if pivot_db:
+                    selected_names = [t for t in selected_names if t.startswith(pivot_db + ".")]
+            except Exception as _:
+                pass
             # -------------------------------------------------------------------
             
             # 3. 获取选中表的完整 Schema (使用列级精简)

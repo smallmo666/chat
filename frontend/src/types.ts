@@ -13,6 +13,15 @@ export interface Message {
     uiComponent?: string;
     images?: string[]; // List of base64 images from Python analysis
     plan?: TaskItem[]; // Execution plan steps
+    clarification?: {
+        question: string;
+        options: string[];
+    };
+    
+    // UI Helpers
+    downloadToken?: string;
+    isCode?: boolean;
+    isAnalysis?: boolean;
 }
 
 export type TaskItem = {

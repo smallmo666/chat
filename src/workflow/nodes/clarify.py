@@ -13,6 +13,8 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     集成长期记忆（用户偏好）和 Schema RAG（数据库结构）以辅助判断。
     """
     print("DEBUG: Entering clarify_intent_node (Async)")
+    if state.get("interrupt_pending"):
+        return {"intent_clear": False, "last_executed_node": "ClarifyIntent"}
 
     # 获取用户 ID 和 Project ID
     configurable = config.get("configurable", {}) if config else {}
@@ -128,23 +130,26 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     try:
         parsed = json.loads(content)
         if parsed.get("status") == "CLEAR":
-            return {"intent_clear": True}
+            return {"intent_clear": True, "last_executed_node": "ClarifyIntent"}
         else:
-            # 返回结构化澄清信息
-            # 我们将 options 和 type 放入 additional_kwargs 或者作为 content 的一部分
-            # 为了兼容前端，我们可以将 JSON 字符串直接作为 content，或者构造一个特殊的 AIMessage
-            
-            # 方案：返回一个带有特殊结构的 AIMessage，前端根据内容是否为 JSON 来判断
+            payload = {
+                "question": parsed.get("question", ""),
+                "options": parsed.get("options", []),
+                "type": parsed.get("type", "select")
+            }
             return {
                 "messages": [AIMessage(content=content)],
-                "intent_clear": False
+                "intent_clear": False,
+                "clarify": payload,
+                "last_executed_node": "ClarifyIntent"
             }
     except json.JSONDecodeError:
         print("Clarify: Failed to parse JSON, falling back to text.")
         # 回退逻辑：假设内容就是问题
         if "CLEAR" in content.upper() and len(content) < 20:
-             return {"intent_clear": True}
+             return {"intent_clear": True, "last_executed_node": "ClarifyIntent"}
         return {
             "messages": [AIMessage(content=content)],
-            "intent_clear": False
+            "intent_clear": False,
+            "last_executed_node": "ClarifyIntent"
         }

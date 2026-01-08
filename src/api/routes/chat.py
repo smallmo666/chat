@@ -70,7 +70,7 @@ async def event_generator(
                     "project_id": project_id,
                     "user_id": user_id 
                 },
-                "recursion_limit": 50,
+                "recursion_limit": 100,
                 "callbacks": [UIStreamingCallbackHandler(token_callback)]
             }
             
@@ -84,7 +84,7 @@ async def event_generator(
                     "rewritten_query": None,
                     "plan": None,
                     "current_step_index": 0,
-                    "intent_clear": False,
+                    "intent_clear": True,
                     "dsl": None,
                     "sql": None,
                     "results": None,
@@ -122,6 +122,20 @@ async def event_generator(
                      print("DEBUG: No next node found in snapshot, forcing resume")
                      
                 inputs = None # Resume
+            elif command == "clarify":
+                snapshot = await graph_app.aget_state(config)
+                if not snapshot.values:
+                    await queue.put({"type": "error", "content": "会话已过期或状态丢失，请刷新页面重新开始。"})
+                    return
+                prev_msgs = snapshot.values.get("messages", [])
+                new_msgs = prev_msgs + [HumanMessage(content=message)]
+                retry = int(snapshot.values.get("clarify_retry_count", 0) or 0) + 1
+                await graph_app.aupdate_state(config, {
+                    "messages": new_msgs,
+                    "clarify_pending": False,
+                    "clarify_retry_count": retry
+                })
+                inputs = None
             
             step_start_time = time.time()
             
@@ -192,6 +206,21 @@ async def event_generator(
                              if msgs and isinstance(msgs[-1], AIMessage):
                                  await queue.put({"type": "result", "content": msgs[-1].content})
                                  audit_data["status"] = "clarification_needed"
+                                 try:
+                                     payload = state_update.get("clarify")
+                                     if not payload:
+                                         content = msgs[-1].content
+                                         if isinstance(content, str):
+                                             parsed = json.loads(content)
+                                             payload = {
+                                                 "question": parsed.get("question", ""),
+                                                 "options": parsed.get("options", []),
+                                                 "type": parsed.get("type", "select")
+                                             }
+                                     if payload:
+                                         await queue.put({"type": "clarification", "content": payload})
+                                 except Exception:
+                                     pass
 
                     elif node_name == "SelectTables":
                         # 处理歧义情况
@@ -200,6 +229,15 @@ async def event_generator(
                              if msgs and isinstance(msgs[-1], AIMessage):
                                  await queue.put({"type": "result", "content": msgs[-1].content})
                                  audit_data["status"] = "clarification_needed"
+                                 try:
+                                     content = msgs[-1].content
+                                     if isinstance(content, str):
+                                         parsed = json.loads(content)
+                                         payload = parsed if isinstance(parsed, dict) else None
+                                         if payload:
+                                             await queue.put({"type": "clarification", "content": payload})
+                                 except Exception:
+                                     pass
                         else:
                             schema = state_update.get("relevant_schema", "")
                             display_schema = schema[:100] + "..." if len(schema) > 100 else schema
@@ -319,13 +357,19 @@ async def event_generator(
                 total_duration = round((time.time() - audit_data["start_time"]) * 1000)
                 app_db = get_app_db()
                 with app_db.get_session() as session:
+                    def _safe_truncate(s: str, limit: int = 64000) -> str:
+                        if not isinstance(s, str):
+                            return s
+                        if len(s) <= limit:
+                            return s
+                        return s[:limit]
                     log_entry = AuditLog(
                         project_id=audit_data["project_id"],
                         user_id=audit_data["user_id"], # Save user_id
                         session_id=audit_data["session_id"],
                         user_query=audit_data["user_query"],
                         plan=audit_data["plan"],
-                        executed_sql=audit_data["executed_sql"],
+                        executed_sql=_safe_truncate(audit_data["executed_sql"]),
                         generated_dsl=audit_data["generated_dsl"], # 保存 DSL
                         result_summary=audit_data["result_summary"],
                         duration_ms=total_duration,
@@ -346,13 +390,19 @@ async def event_generator(
                 total_duration = round((time.time() - audit_data.get("start_time", time.time())) * 1000)
                 app_db = get_app_db()
                 with app_db.get_session() as session:
+                    def _safe_truncate(s: str, limit: int = 64000) -> str:
+                        if not isinstance(s, str):
+                            return s
+                        if len(s) <= limit:
+                            return s
+                        return s[:limit]
                     log_entry = AuditLog(
                         project_id=audit_data.get("project_id"),
                         user_id=audit_data.get("user_id"),
                         session_id=audit_data.get("session_id", "unknown"),
                         user_query=audit_data.get("user_query", ""),
                         plan=audit_data.get("plan"),
-                        executed_sql=audit_data.get("executed_sql"),
+                        executed_sql=_safe_truncate(audit_data.get("executed_sql")),
                         generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
                         result_summary="Cancelled",
                         duration_ms=total_duration,
@@ -371,13 +421,19 @@ async def event_generator(
                 total_duration = round((time.time() - audit_data.get("start_time", time.time())) * 1000)
                 app_db = get_app_db()
                 with app_db.get_session() as session:
+                    def _safe_truncate(s: str, limit: int = 64000) -> str:
+                        if not isinstance(s, str):
+                            return s
+                        if len(s) <= limit:
+                            return s
+                        return s[:limit]
                     log_entry = AuditLog(
                         project_id=audit_data.get("project_id"),
                         user_id=audit_data.get("user_id"),
                         session_id=audit_data.get("session_id", "unknown"),
                         user_query=audit_data.get("user_query", ""),
                         plan=audit_data.get("plan"),
-                        executed_sql=audit_data.get("executed_sql"),
+                        executed_sql=_safe_truncate(audit_data.get("executed_sql")),
                         generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
                         result_summary="Error",
                         duration_ms=total_duration,

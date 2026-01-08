@@ -46,3 +46,15 @@ class AgentState(TypedDict):
     error: Optional[str]
     retry_count: Optional[int] # SQL Execution Retry Count (Inner Loop)
     plan_retry_count: Optional[int] # Plan Regeneration Retry Count (Outer Loop)
+    
+    # Clarify Intent Management
+    last_executed_node: Optional[str]
+    clarify_pending: Optional[bool]
+    clarify_payload: Optional[dict]
+    clarify_answer: Optional[str]
+    clarify_retry_count: Optional[int]
+    
+    # Interrupt Management
+    interrupt_pending: Optional[bool]
+    interrupt_reason: Optional[str]
+    snapshot_token: Optional[str]

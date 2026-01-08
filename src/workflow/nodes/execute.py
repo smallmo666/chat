@@ -117,6 +117,8 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
     **增强**: 集成隐私过滤 (Privacy Layer)。
     """
     print("DEBUG: Entering execute_sql_node")
+    if state.get("interrupt_pending"):
+        return {"results": "中断：已暂停执行", "error": None}
     sql = state.get("sql")
     print(f"DEBUG: execute_sql_node - SQL: {sql}")
 
@@ -235,10 +237,32 @@ async def execute_sql_node(state: AgentState, config: dict) -> dict:
         
     except Exception as e:
         error_msg = str(e)
+        # 错误类型分类
+        def classify_error(msg: str) -> str:
+            m = msg.lower()
+            if "unknown column" in m or "column not found" in m or "no such column" in m or "undefined column" in m:
+                return "column_not_found"
+            if "unknown table" in m or "no such table" in m or "relation" in m and "does not exist" in m:
+                return "table_not_found"
+            if "syntax error" in m or "parse error" in m:
+                return "syntax_error"
+            if "does not exist" in m and "function" in m:
+                return "function_not_found"
+            if "operator does not exist" in m or "type mismatch" in m or "invalid input syntax" in m:
+                return "type_mismatch"
+            if "permission denied" in m or "read only" in m:
+                return "permission"
+            if "unknown column in 'field list'" in m or "ambiguous column" in m:
+                return "ambiguous_or_field_list"
+            if "unknown column" in m and "on clause" in m:
+                return "join_invalid"
+            return "unknown"
+        err_type = classify_error(error_msg)
         if "read only" in error_msg.lower():
              error_msg = f"数据库错误: 数据库处于只读模式。请检查您的查询或数据库配置。 ({error_msg})"
 
         return {
             "error": error_msg,
-            "results": f"SQL 执行失败: {error_msg}"
+            "results": f"SQL 执行失败: {error_msg}",
+            "error_type": err_type
         }

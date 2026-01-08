@@ -25,6 +25,8 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
     可视化节点。
     根据 VisualizationAdvisor 的建议 (viz_config) 和数据，生成具体的 ECharts 配置。
     """
+    if state.get("interrupt_pending"):
+        return {"visualization": None}
     query = ""
     for msg in reversed(state["messages"]):
         if msg.type == "human":
@@ -73,6 +75,11 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
         reason = viz_config.get("reason", "")
         x_axis_hint = viz_config.get("x_axis", "自动推断")
         y_axis_hint = str(viz_config.get("y_axis", "自动推断"))
+    
+    # 数据为空则强制回退表格以避免结构化校验错误
+    if not parsed_data:
+        recommended_chart = "table"
+        reason = (reason or "数据为空，回退为表格展示")
 
     # 如果推荐是表格，直接返回，不浪费 LLM Token
     if recommended_chart == "table" and parsed_data:
@@ -167,19 +174,16 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
     except Exception as e:
         print(f"Visualization LLM error: {e}")
         # 出错兜底：表格
-        if parsed_data:
-            columns = list(parsed_data[0].keys())
-            return {
-                "visualization": {
-                    "chart_type": "table",
-                    "table_data": {
-                        "columns": columns,
-                        "data": parsed_data
-                    },
-                    "reason": "Visualization generation failed, fallback to table.",
-                    "is_truncated": is_truncated,
-                    "original_count": original_count
-                }
+        columns = list(parsed_data[0].keys()) if parsed_data else []
+        return {
+            "visualization": {
+                "chart_type": "table",
+                "table_data": {
+                    "columns": columns,
+                    "data": parsed_data
+                },
+                "reason": "Visualization generation failed, fallback to table.",
+                "is_truncated": is_truncated,
+                "original_count": original_count
             }
-        return {"visualization": None}
-
+        }

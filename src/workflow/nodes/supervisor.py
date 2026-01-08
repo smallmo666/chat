@@ -1,4 +1,5 @@
 from src.workflow.state import AgentState
+from src.workflow.utils.snapshot import save_snapshot, gen_snapshot_token
 
 def supervisor_node(state: AgentState, config: dict = None) -> dict:
     """
@@ -9,11 +10,86 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering supervisor_node")
     try:
         # --- 1. Intent Check ---
-        # 如果 ClarifyIntent 标记意图不清晰，立即停止流程，等待用户回复
-        intent_clear = state.get("intent_clear", True) # 默认为 True
+        intent_clear = state.get("intent_clear", True)
+        plan = state.get("plan", [])
+        current_index = state.get("current_step_index", 0)
+        prev_node = plan[current_index - 1]["node"] if current_index > 0 else None
+        last_executed = state.get("last_executed_node")
+        clarify_payload = state.get("clarify")
+        clarify_pending = state.get("clarify_pending", False)
+        clarify_retry = int(state.get("clarify_retry_count", 0) or 0)
+        # Interrupt handling
+        interrupt_pending = bool(state.get("interrupt_pending"))
+        if interrupt_pending:
+            print("DEBUG: Supervisor - Interrupt detected. Saving snapshot and finishing.")
+            token = state.get("snapshot_token")
+            if not token:
+                token = gen_snapshot_token(state)
+            configurable = config.get("configurable", {}) if config else {}
+            project_id = configurable.get("project_id")
+            thread_id = configurable.get("thread_id", "default_thread")
+            try:
+                save_snapshot(state, project_id, thread_id, token)
+            except Exception as _:
+                pass
+            return {
+                "next": "FINISH",
+                "snapshot_token": token,
+                "interrupt_pending": True
+            }
         if intent_clear is False:
-             print("DEBUG: Supervisor - Intent NOT clear. Routing to SelectTables.")
-             return {"next": "SelectTables", "intent_clear": True}
+            # 若刚执行 ClarifyIntent 或已有澄清挂起，则不再路由 ClarifyIntent，挂起等待选择或自动兜底
+            if (last_executed == "ClarifyIntent") or clarify_payload or clarify_pending:
+                # 设置挂起
+                if not clarify_pending:
+                    print("DEBUG: Supervisor - Clarify pending set. Halting plan for user selection.")
+                    return {
+                        "next": "FINISH",
+                        "clarify_pending": True,
+                        "clarify_retry_count": clarify_retry
+                    }
+                # 自动兜底：超过重试上限时进行自动选择
+                if clarify_pending and clarify_retry >= 1:
+                    def _auto_select(opts: list[str]) -> str | None:
+                        if not opts:
+                            return None
+                        # 选择更可能代表“销售额/金额”的字段
+                        # 优先包含 amount/total/value/sum；避免 unit/price_per/unit_value
+                        def score(opt: str) -> float:
+                            s = 0.0
+                            low = opt.lower()
+                            if any(k in low for k in ["amount","total","value","sum","revenue","sales"]):
+                                s += 1.0
+                            if "transaction" in low:
+                                s += 0.5
+                            if any(k in low for k in ["unit","per_unit","unit_value","unitprice"]):
+                                s -= 0.8
+                            # 数值列的指示很难在此处获取类型；仅用词汇启发
+                            return s
+                        best = sorted(opts, key=score, reverse=True)[0]
+                        return best
+                    opts = []
+                    try:
+                        opts = clarify_payload.get("options", [])
+                    except Exception:
+                        opts = []
+                    chosen = _auto_select(opts)
+                    print(f"DEBUG: Supervisor - Auto-selected clarify option: {chosen}")
+                    return {
+                        "next": "FINISH",
+                        "clarify_pending": False,
+                        "clarify_answer": chosen,
+                        "clarify_retry_count": clarify_retry + 1
+                    }
+                # 已挂起但未达到重试→保持挂起状态，避免循环
+                print("DEBUG: Supervisor - Intent NOT clear but pending; finishing to await input.")
+                return {"next": "FINISH"}
+            # 首次进入 ClarifyIntent
+            if prev_node not in {"ClarifyIntent", "SelectTables"} and last_executed not in {"ClarifyIntent", "SelectTables"}:
+                print("DEBUG: Supervisor - Intent NOT clear. Routing to ClarifyIntent.")
+                return {"next": "ClarifyIntent"}
+            print("DEBUG: Supervisor - Intent NOT clear after clarification/select. Finishing.")
+            return {"next": "FINISH"}
         # -----------------------
 
         plan = state.get("plan", [])
@@ -73,7 +149,10 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
             python_analysis_result = state.get("analysis")
             viz_config = state.get("visualization")
             
-            has_data = results_str and "Error" not in results_str and "Empty" not in results_str
+            # 增强的空数据检测逻辑
+            # ExecuteSQL 在无数据时返回 "[]"
+            is_empty_json = results_str and results_str.strip() == "[]"
+            has_data = results_str and "Error" not in results_str and "Empty" not in results_str and not is_empty_json
             
             # 优先路由到 PythonAnalysis (如果需要深度分析且未执行过)
             if (analysis_depth == "deep" and has_data and not python_analysis_result):
