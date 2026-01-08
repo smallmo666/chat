@@ -4,7 +4,7 @@ import {
     PlusOutlined, DeleteOutlined, EditOutlined, MessageOutlined, 
     CalendarOutlined 
 } from '@ant-design/icons';
-import type { ChatSession } from '../types';
+import type { ChatSession } from '../chatTypes';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isToday from 'dayjs/plugin/isToday';

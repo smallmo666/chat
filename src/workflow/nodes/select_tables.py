@@ -2,7 +2,7 @@ from src.workflow.state import AgentState
 from src.domain.schema.search import get_schema_searcher
 from src.core.llm import get_llm
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage
 from src.workflow.utils.schema_format import format_schema_str
 import asyncio
 

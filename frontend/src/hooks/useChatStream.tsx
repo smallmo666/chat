@@ -4,7 +4,7 @@ import { SyncOutlined, LoadingOutlined } from '@ant-design/icons';
 import { Tag } from 'antd';
 import React from 'react';
 import { ENDPOINTS } from '../config';
-import type { Message, TaskItem } from '../types';
+import type { Message, TaskItem } from '../chatTypes';
 
 interface UseChatStreamProps {
     projectId?: string;
@@ -122,9 +122,10 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                     'Authorization': `Bearer ${token}`,
                     ...(retry ? { 'X-Retry': '1' } : {})
                 },
-                body: JSON.stringify({ 
-                    message: userMsg,
-                    selected_tables: selectedTables.length > 0 ? selectedTables : undefined,
+                body: JSON.stringify({
+                    message: command === 'clarify' ? '' : userMsg,
+                    selected_tables: command === 'clarify' ? undefined : (selectedTables.length > 0 ? selectedTables : undefined),
+                    clarify_choices: command === 'clarify' ? checkedKeys.filter(k => typeof k === 'string') : undefined,
                     thread_id: threadId,
                     project_id: projectId ? parseInt(projectId) : undefined,
                     command,
@@ -199,6 +200,20 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                 }
                                 return newMsgs;
                             });
+                        } else if (eventType === 'substep') {
+                            const { node, step, detail, ts } = data;
+                            setMessages(prev => {
+                                const newMsgs = [...prev];
+                                const lastMsg = newMsgs[newMsgs.length - 1];
+                                const logItem = { node, step, detail, ts };
+                                if (lastMsg && lastMsg.role === 'agent') {
+                                    const logs = (lastMsg.actionLogs || []).concat([logItem]);
+                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, actionLogs: logs };
+                                } else {
+                                    newMsgs.push({ role: 'agent', content: '', actionLogs: [logItem] });
+                                }
+                                return newMsgs;
+                            });
                         } else if (eventType === 'step') {
                             updateStepStatus(data.node, data.status, data.details, data.duration);
                         } else if (eventType === 'interrupt') {
@@ -245,12 +260,23 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                     let clarification = undefined;
                                     let content = data.content;
                                     try {
-                                        if (typeof content === 'string' && (content.trim().startsWith('{') || content.trim().startsWith('```json'))) {
-                                            const cleanContent = content.replace(/```json\n|\n```/g, '').trim();
-                                            const parsed = JSON.parse(cleanContent);
-                                            if (parsed.status === 'AMBIGUOUS') {
-                                                clarification = parsed;
-                                                content = ''; // Clear content so we don't show raw JSON
+                                        if (typeof content === 'string') {
+                                            const trimmed = content.trim();
+                                            let jsonStr: string | null = null;
+                                            if (trimmed.startsWith('```json')) {
+                                                jsonStr = trimmed.replace(/```json\s*|\s*```/g, '').trim();
+                                            } else if (trimmed.startsWith('{')) {
+                                                jsonStr = trimmed;
+                                            } else {
+                                                const match = trimmed.match(/\{[\s\S]*\}/);
+                                                jsonStr = match ? match[0] : null;
+                                            }
+                                            if (jsonStr) {
+                                                const parsed = JSON.parse(jsonStr);
+                                                if (parsed.status === 'AMBIGUOUS') {
+                                                    clarification = parsed;
+                                                    content = '';
+                                                }
                                             }
                                         }
                                     } catch (e) {

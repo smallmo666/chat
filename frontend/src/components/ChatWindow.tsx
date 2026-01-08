@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import { useTheme } from '../context/ThemeContext';
 import { useSchema } from '../context/SchemaContext';
-import type { Message, TaskItem } from '../types';
+import type { Message, TaskItem } from '../chatTypes';
 import MessageBubble from './chat/MessageBubble';
 import InputBar from './chat/InputBar';
 import WelcomeScreen from './chat/WelcomeScreen';

@@ -1,9 +1,6 @@
 import sys
 import os
-import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine, select
-from datetime import datetime
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))

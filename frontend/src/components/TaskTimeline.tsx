@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tag, Typography, Steps, theme } from 'antd';
 import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleFilled } from '@ant-design/icons';
-import type { TaskItem } from '../types';
+import type { TaskItem } from '../chatTypes';
 
 const { Text } = Typography;
 

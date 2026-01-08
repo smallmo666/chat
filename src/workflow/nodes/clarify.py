@@ -5,6 +5,7 @@ from src.workflow.state import AgentState
 from src.core.llm import get_llm
 from src.domain.memory.short_term import get_memory
 from src.domain.schema.search import get_schema_searcher
+from src.core.event_bus import EventBus
 
 async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     """
@@ -13,6 +14,8 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     集成长期记忆（用户偏好）和 Schema RAG（数据库结构）以辅助判断。
     """
     print("DEBUG: Entering clarify_intent_node (Async)")
+    await EventBus.emit_substep("ClarifyIntent", "start", "开始分析用户意图")
+
     if state.get("interrupt_pending"):
         return {"intent_clear": False, "last_executed_node": "ClarifyIntent"}
 
@@ -36,6 +39,8 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     history_msgs = messages[-10:-1] if len(messages) > 1 else []
     history_text = "\n".join([f"{m.type}: {m.content}" for m in history_msgs]) if history_msgs else "无历史对话"
     
+    await EventBus.emit_substep("ClarifyIntent", "retrieval", "正在检索长期记忆与数据库Schema...")
+
     # 定义异步检索任务
     def _get_memory():
         try:
@@ -79,6 +84,11 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     memories = results[0]
     schema_info = results[1]
 
+    if memories:
+        await EventBus.emit_substep("ClarifyIntent", "memory_hit", f"命中 {len(memories)} 条相关记忆")
+    if schema_info:
+        await EventBus.emit_substep("ClarifyIntent", "schema_hit", "已召回相关Schema信息")
+
     memory_context = "\n".join([f"- {m}" for m in memories]) if memories else "无历史记录"
     schema_context = schema_info if schema_info else "暂无数据库表结构信息。"
 
@@ -111,6 +121,8 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     
     chain = prompt | llm
     
+    await EventBus.emit_substep("ClarifyIntent", "llm_call", "正在进行意图分析...")
+
     # 异步调用 LLM
     result = await chain.ainvoke({"query": last_msg}, config=config)
     content = result.content.strip()
@@ -130,13 +142,19 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     try:
         parsed = json.loads(content)
         if parsed.get("status") == "CLEAR":
+            await EventBus.emit_substep("ClarifyIntent", "result", "意图清晰，继续执行")
             return {"intent_clear": True, "last_executed_node": "ClarifyIntent"}
         else:
             payload = {
                 "question": parsed.get("question", ""),
                 "options": parsed.get("options", []),
-                "type": parsed.get("type", "select")
+                "type": parsed.get("type", "select"),
+                "scope": parsed.get("scope", "schema")
             }
+            # 关键：在这里直接通过 EventBus 发送澄清请求，不再依赖 State 更新后的回调
+            await EventBus.emit("clarification", payload)
+            await EventBus.emit_substep("ClarifyIntent", "ambiguity", "检测到歧义，需要用户澄清")
+            
             return {
                 "messages": [AIMessage(content=content)],
                 "intent_clear": False,

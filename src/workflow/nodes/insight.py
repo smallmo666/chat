@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import List
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field

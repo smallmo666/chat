@@ -2,7 +2,7 @@ import asyncio
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List
 
 from src.workflow.state import AgentState
 from src.core.llm import get_llm

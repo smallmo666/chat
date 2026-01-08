@@ -7,7 +7,7 @@ import SchemaBrowser from '../components/SchemaBrowser';
 import ChatWindow from '../components/ChatWindow';
 import TaskTimeline from '../components/TaskTimeline';
 import SessionList from '../components/SessionList';
-import type { Message, ChatSession } from '../types';
+import type { Message, ChatSession } from '../chatTypes';
 import { SchemaProvider, useSchema } from '../context/SchemaContext';
 import { fetchSessions, fetchSessionHistory, deleteSession, updateSessionTitle, fetchProject } from '../lib/api';
 import { useChatStream } from '../hooks/useChatStream';
@@ -248,7 +248,7 @@ const ChatPageContent: React.FC = () => {
                     <ChatWindow 
                         messages={messages}
                         isLoading={isLoading}
-                        onSendMessage={(msg, cmd, sql, tables) => sendMessage(msg, tables || checkedKeys, cmd, sql)}
+                        onSendMessage={(msg, cmd, sql, tables) => sendMessage(msg, cmd === "clarify" ? [] : (tables || checkedKeys), cmd, sql)}
                         latestData={latestData}
                         projectId={projectId}
                         projectName={projectName}
@@ -307,7 +307,7 @@ const ChatPageContent: React.FC = () => {
                     <ChatWindow 
                         messages={messages}
                         isLoading={isLoading}
-                        onSendMessage={(msg, cmd, sql) => sendMessage(msg, checkedKeys, cmd, sql)}
+                        onSendMessage={(msg, cmd, sql) => sendMessage(msg, cmd === "clarify" ? [] : checkedKeys, cmd, sql)}
                         latestData={latestData}
                         projectId={projectId}
                         projectName={projectName}

@@ -39,9 +39,10 @@ class ChatRequest(BaseModel):
     project_id: Optional[int] = None
     thread_id: Optional[str] = None
     selected_tables: Optional[list[str]] = None
+    clarify_choices: Optional[list[str]] = None
     
     # HITL Control
-    command: Optional[str] = "start" # start, approve, edit
+    command: Optional[str] = "start"
     modified_sql: Optional[str] = None
 
 class PythonExecRequest(BaseModel):

@@ -1,8 +1,6 @@
 import asyncio
 import re
 import json
-import types
-import pytest
 
 from src.workflow.nodes.dsl2sql import dsl_to_sql_node
 from src.workflow.state import AgentState

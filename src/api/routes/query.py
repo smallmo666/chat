@@ -2,10 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from src.core.redis_client import get_redis_client
 from src.core.database import get_query_db
-from src.core.config import settings
-import asyncio
 import json
-import time
 
 router = APIRouter(tags=["query"])
 

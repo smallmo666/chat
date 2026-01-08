@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import type { TableSchema } from '../types';
+import type { TableSchema } from '../chatTypes';
 import api from '../lib/api';
 
 interface SchemaContextType {

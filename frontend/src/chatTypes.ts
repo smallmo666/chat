@@ -16,7 +16,11 @@ export interface Message {
     clarification?: {
         question: string;
         options: string[];
+        type?: 'select' | 'multiple';
+        scope?: 'task' | 'schema' | 'param';
     };
+    actionLogs?: { node: string; step: string; detail?: string; metrics?: any; ts?: number }[];
+    detectiveInsight?: { hypotheses: string[]; depth: string }; // 补充 detectiveInsight 字段
     
     // UI Helpers
     downloadToken?: string;
@@ -59,6 +63,3 @@ export interface ChatSession {
     updated_at: string;
     project_id: number;
 }
-
-// Dummy export to ensure this is treated as a module
-export const _types = true;

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ChatSession } from '../types';
+import type { ChatSession } from '../chatTypes';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 

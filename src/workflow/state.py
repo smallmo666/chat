@@ -51,7 +51,7 @@ class AgentState(TypedDict):
     last_executed_node: Optional[str]
     clarify_pending: Optional[bool]
     clarify_payload: Optional[dict]
-    clarify_answer: Optional[str]
+    clarify_answer: Optional[dict]
     clarify_retry_count: Optional[int]
     
     # Interrupt Management

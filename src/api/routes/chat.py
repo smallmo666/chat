@@ -3,26 +3,21 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException
+from typing import AsyncGenerator, Optional, List
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from src.workflow.graph import create_graph
 from src.core.database import get_app_db
-from src.core.models import AuditLog, User, Knowledge, Dashboard, ChatSession
+from src.core.models import AuditLog, User, ChatSession
 from src.utils.callbacks import UIStreamingCallbackHandler
 from src.api.schemas import (
-    ChatRequest, 
-    PythonExecRequest, 
-    SessionListRequest, 
-    SessionHistoryRequest, 
-    SessionDeleteRequest, 
-    SessionUpdateRequest
+    ChatRequest
 )
 # Import auth dependency
 from src.core.security_auth import get_current_active_user
-from sqlmodel import select, desc
+from src.core.event_bus import EventBus
 
 router = APIRouter(tags=["chat"])
 
@@ -43,12 +38,16 @@ async def event_generator(
     project_id: Optional[int],
     user_id: Optional[int], # Added user_id
     command: str = "start",
-    modified_sql: Optional[str] = None
+    modified_sql: Optional[str] = None,
+    clarify_choices: Optional[List[str]] = None
 ) -> AsyncGenerator[str, None]:
     """
     生成器，用于生成来自图状态更新和 LLM 令牌流（通过回调）的 SSE 事件。
     """
     queue = asyncio.Queue()
+    # 关键：设置当前请求的 queue 到 EventBus
+    EventBus.set_queue(queue)
+    
     SENTINEL = object()
     
     try:
@@ -128,13 +127,15 @@ async def event_generator(
                     await queue.put({"type": "error", "content": "会话已过期或状态丢失，请刷新页面重新开始。"})
                     return
                 prev_msgs = snapshot.values.get("messages", [])
-                new_msgs = prev_msgs + [HumanMessage(content=message)]
+                new_msgs = prev_msgs + ([HumanMessage(content=message)] if message else [])
                 retry = int(snapshot.values.get("clarify_retry_count", 0) or 0) + 1
                 await graph_app.aupdate_state(config, {
                     "messages": new_msgs,
                     "clarify_pending": False,
                     "clarify_retry_count": retry
                 })
+                if clarify_choices:
+                    await graph_app.aupdate_state(config, {"clarify_answer": {"choices": clarify_choices}})
                 inputs = None
             
             step_start_time = time.time()
@@ -175,6 +176,16 @@ async def event_generator(
                         "duration": duration
                     }
                     
+                    # 仍然调用动态生成器，作为节点完成后的补充（或移除，避免重复）
+                    # 鉴于我们已经在 Node 内部做了实时推送，这里的“事后”推送可以作为一种状态同步或保留 high 粒度指标
+                    try:
+                        from src.workflow.utils.substeps import build_substeps
+                        subs = build_substeps(node_name, state_update, verbosity="medium")
+                        for s in subs:
+                            await queue.put({"type": "substep", **s})
+                    except Exception:
+                        pass
+                    
                     if node_name == "DataDetective":
                         hypotheses = state_update.get("hypotheses", [])
                         depth = state_update.get("analysis_depth", "simple")
@@ -197,30 +208,20 @@ async def event_generator(
                         await queue.put({"type": "plan", "content": plan})
                         event_data["details"] = f"已生成 {len(plan)} 步执行计划"
                         audit_data["plan"] = plan
+                        
 
                     elif node_name == "ClarifyIntent":
                         intent_clear = state_update.get("intent_clear", False)
                         event_data["details"] = "意图清晰" if intent_clear else "需要澄清"
+                        # 澄清逻辑已在 Node 内部处理，这里主要处理其他状态或日志
                         if not intent_clear:
-                             msgs = state_update.get("messages", [])
-                             if msgs and isinstance(msgs[-1], AIMessage):
-                                 await queue.put({"type": "result", "content": msgs[-1].content})
-                                 audit_data["status"] = "clarification_needed"
-                                 try:
-                                     payload = state_update.get("clarify")
-                                     if not payload:
-                                         content = msgs[-1].content
-                                         if isinstance(content, str):
-                                             parsed = json.loads(content)
-                                             payload = {
-                                                 "question": parsed.get("question", ""),
-                                                 "options": parsed.get("options", []),
-                                                 "type": parsed.get("type", "select")
-                                             }
-                                     if payload:
-                                         await queue.put({"type": "clarification", "content": payload})
-                                 except Exception:
-                                     pass
+                             audit_data["status"] = "clarification_needed"
+                             # 兼容性：如果 Node 内部发送失败或为了确保前端收到，再次检查
+                             # 但如果 Node 内部已发，这里可能会发两次。前端应去重或更新
+                             # 鉴于 Node 内部的 emit 更可靠且实时，这里可以简化
+                             pass 
+                        else:
+                            pass
 
                     elif node_name == "SelectTables":
                         # 处理歧义情况
@@ -229,15 +230,8 @@ async def event_generator(
                              if msgs and isinstance(msgs[-1], AIMessage):
                                  await queue.put({"type": "result", "content": msgs[-1].content})
                                  audit_data["status"] = "clarification_needed"
-                                 try:
-                                     content = msgs[-1].content
-                                     if isinstance(content, str):
-                                         parsed = json.loads(content)
-                                         payload = parsed if isinstance(parsed, dict) else None
-                                         if payload:
-                                             await queue.put({"type": "clarification", "content": payload})
-                                 except Exception:
-                                     pass
+                                 # 同样，SelectTables 的歧义处理最好也移到 Node 内部
+                            
                         else:
                             schema = state_update.get("relevant_schema", "")
                             display_schema = schema[:100] + "..." if len(schema) > 100 else schema
@@ -253,16 +247,19 @@ async def event_generator(
                             
                             if extracted_tables:
                                 await queue.put({"type": "selected_tables", "content": extracted_tables})
+                            
 
                     elif node_name == "GenerateDSL":
                         dsl = state_update.get("dsl", "")
                         event_data["details"] = dsl
                         audit_data["generated_dsl"] = dsl # 捕获 DSL
                         
+                        
                     elif node_name == "DSLtoSQL":
                         sql = state_update.get("sql", "")
                         event_data["details"] = sql
                         audit_data["executed_sql"] = sql
+                        
                         
                     elif node_name == "ExecuteSQL":
                         results_json_str = state_update.get("results", "[]")
@@ -357,326 +354,61 @@ async def event_generator(
                 total_duration = round((time.time() - audit_data["start_time"]) * 1000)
                 app_db = get_app_db()
                 with app_db.get_session() as session:
-                    def _safe_truncate(s: str, limit: int = 64000) -> str:
-                        if not isinstance(s, str):
-                            return s
-                        if len(s) <= limit:
-                            return s
-                        return s[:limit]
-                    log_entry = AuditLog(
-                        project_id=audit_data["project_id"],
-                        user_id=audit_data["user_id"], # Save user_id
-                        session_id=audit_data["session_id"],
-                        user_query=audit_data["user_query"],
-                        plan=audit_data["plan"],
-                        executed_sql=_safe_truncate(audit_data["executed_sql"]),
-                        generated_dsl=audit_data["generated_dsl"], # 保存 DSL
-                        result_summary=audit_data["result_summary"],
-                        duration_ms=total_duration,
-                        status=audit_data["status"],
-                        error_message=audit_data["error_message"]
+                    # Update session
+                    chat_session = session.get(ChatSession, thread_id)
+                    if chat_session:
+                        chat_session.updated_at = datetime.utcnow()
+                        session.add(chat_session)
+                    
+                    # Create audit log
+                    log = AuditLog(
+                        project_id=project_id,
+                        user_id=user_id,
+                        session_id=thread_id,
+                        query=message,
+                        sql_query=audit_data["executed_sql"],
+                        execution_time_ms=total_duration,
+                        status="success",
+                        result_summary=audit_data["result_summary"]
                     )
-                    session.add(log_entry)
+                    session.add(log)
                     session.commit()
-                # Push a final finish event to ensure UI receives completion
-                await queue.put({"type": "result", "content": "本轮流程已完成"})
+                    
+                    # Feedback trigger?
+                    # await queue.put({"type": "feedback_request", "audit_id": log.id})
             except Exception as e:
                 print(f"Failed to save audit log: {e}")
-                    
-        except GeneratorExit:
-            print(f"Client disconnected from stream: {thread_id}")
-            # Save Audit Log (Cancelled)
-            try:
-                total_duration = round((time.time() - audit_data.get("start_time", time.time())) * 1000)
-                app_db = get_app_db()
-                with app_db.get_session() as session:
-                    def _safe_truncate(s: str, limit: int = 64000) -> str:
-                        if not isinstance(s, str):
-                            return s
-                        if len(s) <= limit:
-                            return s
-                        return s[:limit]
-                    log_entry = AuditLog(
-                        project_id=audit_data.get("project_id"),
-                        user_id=audit_data.get("user_id"),
-                        session_id=audit_data.get("session_id", "unknown"),
-                        user_query=audit_data.get("user_query", ""),
-                        plan=audit_data.get("plan"),
-                        executed_sql=_safe_truncate(audit_data.get("executed_sql")),
-                        generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
-                        result_summary="Cancelled",
-                        duration_ms=total_duration,
-                        status="cancelled",
-                        error_message="Client disconnected"
-                    )
-                    session.add(log_entry)
-                    session.commit()
-            except Exception as log_err:
-                print(f"Failed to save cancelled audit log: {log_err}")
-            raise # Re-raise to stop generator properly
 
         except Exception as e:
-            # Save Audit Log (Error)
+            await queue.put({"type": "error", "content": str(e)})
+            # Audit log (Error)
             try:
-                total_duration = round((time.time() - audit_data.get("start_time", time.time())) * 1000)
                 app_db = get_app_db()
                 with app_db.get_session() as session:
-                    def _safe_truncate(s: str, limit: int = 64000) -> str:
-                        if not isinstance(s, str):
-                            return s
-                        if len(s) <= limit:
-                            return s
-                        return s[:limit]
-                    log_entry = AuditLog(
-                        project_id=audit_data.get("project_id"),
-                        user_id=audit_data.get("user_id"),
-                        session_id=audit_data.get("session_id", "unknown"),
-                        user_query=audit_data.get("user_query", ""),
-                        plan=audit_data.get("plan"),
-                        executed_sql=_safe_truncate(audit_data.get("executed_sql")),
-                        generated_dsl=audit_data.get("generated_dsl"), # 保存 DSL
-                        result_summary="Error",
-                        duration_ms=total_duration,
+                    log = AuditLog(
+                        project_id=project_id,
+                        user_id=user_id,
+                        session_id=thread_id,
+                        query=message,
                         status="error",
-                        error_message=str(e)[:2000]
+                        error_message=str(e),
+                        execution_time_ms=0
                     )
-                    session.add(log_entry)
+                    session.add(log)
                     session.commit()
-            except Exception as log_err:
-                print(f"Failed to save error audit log: {log_err}")
-
-            await queue.put({"type": "error", "content": str(e)})
-            import traceback
-            traceback.print_exc()
+            except:
+                pass
         finally:
             await queue.put(SENTINEL)
 
     asyncio.create_task(run_graph())
-    
+
     while True:
-        data = await queue.get()
-        if data is SENTINEL:
+        item = await queue.get()
+        if item is SENTINEL:
             break
-        yield f"event: {data['type']}\n"
-        yield f"data: {json.dumps(data)}\n\n"
-
-@router.post("/chat/python/execute")
-async def execute_python_code(
-    request: PythonExecRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    Execute Python code in the context of an existing project session.
-    """
-    # Use project_id as session_id to reuse the DataFrame context
-    sandbox = StatefulSandbox(session_id=request.project_id)
-    
-    # Execute code
-    # We don't pass 'df' here because we assume it's already in the session's locals
-    # from previous 'PythonAnalysis' node execution.
-    # However, if the session expired or 'df' is missing, the user might get a NameError.
-    # Ideally, we should check if 'df' exists, or the UI should warn the user.
-    
-    result = await asyncio.to_thread(sandbox.execute, request.code)
-    
-    return result
-
-@router.post("/knowledge")
-async def add_knowledge(
-    term: str,
-    definition: str,
-    formula: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    添加业务知识条目
-    """
-    # TODO: In future, integrate with Vector Store embedding
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        # Check organization (assuming user belongs to one)
-        # org_id = current_user.organization_id # Need to implement multi-tenancy context
-        
-        knowledge = Knowledge(
-            term=term,
-            definition=definition,
-            formula=formula,
-            tags=tags or []
-        )
-        session.add(knowledge)
-        session.commit()
-        session.refresh(knowledge)
-        return knowledge
-
-@router.get("/knowledge")
-async def list_knowledge(
-    current_user: User = Depends(get_current_active_user)
-):
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        statement = select(Knowledge).order_by(Knowledge.created_at.desc())
-        results = session.exec(statement).all()
-        return results
-
-@router.delete("/knowledge/{kid}")
-async def delete_knowledge(
-    kid: int,
-    current_user: User = Depends(get_current_active_user)
-):
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        k = session.get(Knowledge, kid)
-        if not k:
-            return {"error": "Not found"}
-        session.delete(k)
-        session.commit()
-        return {"status": "deleted"}
-
-@router.post("/dashboards")
-async def create_dashboard(
-    title: str,
-    project_id: int,
-    layout: dict = {},
-    charts: list = [],
-    current_user: User = Depends(get_current_active_user)
-):
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        dashboard = Dashboard(
-            title=title,
-            project_id=project_id,
-            user_id=current_user.id,
-            layout=layout,
-            charts=charts
-        )
-        session.add(dashboard)
-        session.commit()
-        session.refresh(dashboard)
-        return dashboard
-
-@router.get("/dashboards")
-async def list_dashboards(
-    project_id: Optional[int] = None,
-    current_user: User = Depends(get_current_active_user)
-):
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        query = select(Dashboard)
-        if project_id:
-            query = query.where(Dashboard.project_id == project_id)
-        results = session.exec(query).all()
-        return results
-
-# --- Session Management Endpoints ---
-
-@router.post("/chat/sessions/list")
-async def list_sessions(
-    request: SessionListRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    获取当前用户在指定项目下的会话列表。
-    """
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        query = select(ChatSession).where(
-            ChatSession.user_id == current_user.id,
-            ChatSession.project_id == request.project_id,
-            ChatSession.is_active == True
-        ).order_by(desc(ChatSession.updated_at))
-        
-        results = session.exec(query).all()
-        return results
-
-@router.post("/chat/sessions/history")
-async def get_session_history(
-    request: SessionHistoryRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    获取指定会话的历史消息记录 (从 LangGraph 状态恢复)。
-    """
-    graph_app = get_graph()
-    
-    # 验证 Session 是否属于该用户 (可选，但推荐)
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        chat_session = session.get(ChatSession, request.session_id)
-        if not chat_session or chat_session.user_id != current_user.id:
-             # 如果找不到，或者不属于该用户，返回空或错误
-             # 为了安全，这里不报错，只返回空历史
-             pass 
-
-    # 从 LangGraph 获取状态
-    config = {"configurable": {"thread_id": request.session_id}}
-    try:
-        snapshot = await graph_app.aget_state(config)
-        if not snapshot.values:
-            return []
-            
-        messages = snapshot.values.get("messages", [])
-        
-        # 序列化消息
-        history = []
-        for msg in messages:
-            msg_type = msg.type
-            content = msg.content
-            # 处理特殊类型的消息内容 (如 AIMessage 可能包含 tool_calls)
-            history.append({
-                "type": msg_type,
-                "content": content
-            })
-            
-        return history
-    except Exception as e:
-        print(f"Failed to fetch history for session {request.session_id}: {e}")
-        return []
-
-@router.post("/chat/sessions/delete")
-async def delete_session(
-    request: SessionDeleteRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    软删除会话。
-    """
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        chat_session = session.get(ChatSession, request.session_id)
-        if not chat_session:
-            return {"error": "Session not found"}
-        
-        if chat_session.user_id != current_user.id:
-            return {"error": "Permission denied"}
-            
-        chat_session.is_active = False
-        session.add(chat_session)
-        session.commit()
-        return {"status": "success", "session_id": request.session_id}
-
-@router.post("/chat/sessions/update")
-async def update_session(
-    request: SessionUpdateRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    更新会话标题。
-    """
-    app_db = get_app_db()
-    with app_db.get_session() as session:
-        chat_session = session.get(ChatSession, request.session_id)
-        if not chat_session:
-            return {"error": "Session not found"}
-            
-        if chat_session.user_id != current_user.id:
-            return {"error": "Permission denied"}
-            
-        chat_session.title = request.title
-        chat_session.updated_at = datetime.utcnow()
-        session.add(chat_session)
-        session.commit()
-        return {"status": "success", "session_id": request.session_id, "title": request.title}
+        yield f"event: {item['type']}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+        queue.task_done()
 
 @router.post("/chat")
 async def chat_endpoint(
@@ -722,7 +454,8 @@ async def chat_endpoint(
             request.project_id,
             current_user.id, # Pass current user ID
             request.command,
-            request.modified_sql
+            request.modified_sql,
+            request.clarify_choices # Pass clarify choices
         ),
         media_type="text/event-stream"
     )

@@ -1,6 +1,5 @@
 import pytest
 import httpx
-import asyncio
 from src.core.config import settings
 
 # Base URL for API

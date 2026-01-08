@@ -1,4 +1,3 @@
-import pandas as pd
 import hashlib
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
