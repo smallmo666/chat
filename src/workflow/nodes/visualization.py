@@ -76,8 +76,18 @@ async def visualization_node(state: AgentState, config: dict = None) -> dict:
     
     # 数据为空则强制回退表格以避免结构化校验错误
     if not parsed_data:
-        recommended_chart = "table"
-        reason = (reason or "数据为空，回退为表格展示")
+        return {
+            "visualization": {
+                "chart_type": "table",
+                "table_data": {
+                    "columns": [],
+                    "data": []
+                },
+                "reason": (reason or "数据为空，回退为表格展示"),
+                "is_truncated": False,
+                "original_count": 0
+            }
+        }
 
     # 如果推荐是表格，直接返回，不浪费 LLM Token
     if recommended_chart == "table" and parsed_data:

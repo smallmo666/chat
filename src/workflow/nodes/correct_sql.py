@@ -136,6 +136,8 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
                 searcher = get_schema_searcher(project_id)
                 # 策略: 使用错误的 SQL 进行检索
                 search_query = wrong_sql
+                if not search_query or not isinstance(search_query, str):
+                     search_query = "tables" # Fallback if SQL is empty or invalid
                 return searcher.search_relevant_tables(search_query, limit=3)
 
             schema_context = await asyncio.to_thread(_search_schema)
@@ -179,7 +181,8 @@ async def correct_sql_node(state: AgentState, config: dict = None) -> dict:
     try:
         retriever = get_glossary_retriever(project_id)
         # 使用 wrong_sql 作为检索上下文可能不太好，但聊胜于无，或者结合 error message
-        glossary_context = retriever.retrieve(wrong_sql + " " + error_message)
+        query_text = (wrong_sql or "") + " " + (error_message or "")
+        glossary_context = retriever.retrieve(query_text)
     except Exception as e:
         print(f"Glossary retrieval failed in correct_sql: {e}")
 

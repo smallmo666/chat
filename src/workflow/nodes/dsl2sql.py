@@ -18,7 +18,10 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         print(f"DEBUG: dsl_to_sql_node input dsl: {dsl_str}")
         # 前置拦截：非 JSON 内容（澄清/文本）直接返回意图不清晰
         if isinstance(dsl_str, str) and not dsl_str.strip().startswith("{"):
-            return {"intent_clear": False}
+            return {
+                "intent_clear": False,
+                "clarify_answer": None  # 强制清除旧的澄清答案，避免 Supervisor 误判
+            }
         
         # 1. 获取数据库类型 (Dialect)
         db_type = "mysql" # 默认
@@ -342,6 +345,8 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                 json_content = json.dumps(payload, ensure_ascii=False)
                 return {
                     "intent_clear": False,
+                    "clarify_answer": None, # 强制清除，确保 Supervisor 暂停等待用户新输入
+                    "clarify": payload,     # 关键修复：显式传递 clarify payload 到 state，供 UI/Supervisor 使用
                     "messages": [AIMessage(content=json_content)]
                 }
         except Exception as e:
@@ -361,4 +366,7 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         
     except Exception as e:
         print(f"ERROR in dsl_to_sql_node: {e}")
-        return {"intent_clear": False}
+        return {
+            "intent_clear": False,
+            "clarify_answer": None
+        }

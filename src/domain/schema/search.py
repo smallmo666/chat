@@ -353,6 +353,10 @@ class SchemaSearcher:
         """
         if not self.vectorstore:
             return "No schema information available."
+        
+        # 防御性检查：确保 query 是非空字符串
+        if not isinstance(query, str) or not query.strip():
+            query = "tables" # 默认查询词
             
         # 1. 向量检索 (Semantic Search)
         # 稍微放宽 limit 以便混合

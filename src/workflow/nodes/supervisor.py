@@ -107,12 +107,13 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
                 # 已挂起但未达到重试→保持挂起状态，避免循环
                 print("DEBUG: Supervisor - Intent NOT clear but pending; finishing to await input.")
                 return {"next": "FINISH"}
-            # 首次进入 ClarifyIntent
-            if prev_node not in {"ClarifyIntent", "SelectTables"} and last_executed not in {"ClarifyIntent", "SelectTables"}:
-                print("DEBUG: Supervisor - Intent NOT clear. Routing to ClarifyIntent.")
-                return {"next": "ClarifyIntent"}
-            print("DEBUG: Supervisor - Intent NOT clear after clarification/select. Finishing.")
-            return {"next": "FINISH"}
+            else:
+                # 首次进入 ClarifyIntent
+                if prev_node not in {"ClarifyIntent", "SelectTables"} and last_executed not in {"ClarifyIntent", "SelectTables"}:
+                    print("DEBUG: Supervisor - Intent NOT clear. Routing to ClarifyIntent.")
+                    return {"next": "ClarifyIntent"}
+                print("DEBUG: Supervisor - Intent NOT clear after clarification/select. Finishing.")
+                return {"next": "FINISH"}
         # -----------------------
 
         plan = state.get("plan", [])
