@@ -1,10 +1,12 @@
-import chromadb
 from typing import List, Dict, Any
 from sqlalchemy import text
 from src.core.database import get_query_db
 import asyncio
 import threading
 import re
+from openai import OpenAI
+from pymilvus import MilvusClient, DataType
+
 from src.core.config import settings
 
 def validate_identifier(name: str):
@@ -23,41 +25,90 @@ class ValueSearcher:
     """
     负责对数据库中的文本列值进行索引和检索，解决实体链接问题。
     例如：用户输入 "iPhone"，数据库存储 "Apple iPhone 15"。
+    基于 Milvus 实现。
     """
     def __init__(self, project_id: int = None):
         self.project_id = project_id
-        self._chroma_client = None
-        self._collection = None
+        self.client = None
+        self.openai_client = None
+        self.collection_name = f"db_values_{self.project_id}" if self.project_id else "db_values_default"
         self._init_vector_db()
 
     def _init_vector_db(self):
         try:
-            # 远端优先（HTTP-only）
-            if settings.CHROMA_USE_REMOTE:
-                try:
-                    self._chroma_client = chromadb.HttpClient(
-                        host=settings.CHROMA_SERVER_HOST,
-                        port=settings.CHROMA_SERVER_PORT
-                    )
-                    self._chroma_client.heartbeat()
-                except Exception as e:
-                    print(f"Warning: Remote ChromaDB unavailable ({e}), falling back to EphemeralClient.")
-                    self._chroma_client = chromadb.EphemeralClient()
-            else:
-                # 持久化客户端，不可用则降级内存
-                try:
-                    self._chroma_client = chromadb.PersistentClient(path="./chroma_db")
-                except Exception as e:
-                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
-                    self._chroma_client = chromadb.EphemeralClient()
-            collection_name = f"db_values_{self.project_id}" if self.project_id else "db_values_default"
+            # 初始化 OpenAI 客户端 (用于 Embedding)
             try:
-                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
-            except Exception:
-                self._chroma_client = chromadb.EphemeralClient()
-                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
+                self.openai_client = OpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    base_url=settings.OPENAI_API_BASE
+                )
+            except Exception as e:
+                print(f"Warning: Failed to initialize OpenAI client for ValueSearcher: {e}")
+                return
+
+            # 初始化 Milvus 客户端
+            try:
+                uri = f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}"
+                print(f"ValueSearcher: Connecting to Milvus at {uri}...")
+                self.client = MilvusClient(
+                    uri=uri,
+                    token=settings.MILVUS_TOKEN,
+                    db_name=settings.MILVUS_DB_NAME
+                )
+                
+                # 检查并创建集合
+                if not self.client.has_collection(self.collection_name):
+                    print(f"Creating Milvus collection: {self.collection_name}")
+                    # 定义 Schema
+                    schema = MilvusClient.create_schema(
+                        auto_id=False,
+                        enable_dynamic_field=True,
+                    )
+                    # 字段定义
+                    # ID 格式: table.col.hash(val) (string)
+                    schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=512, is_primary=True)
+                    schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=settings.EMBEDDING_DIM)
+                    schema.add_field(field_name="value", datatype=DataType.VARCHAR, max_length=65535)
+                    schema.add_field(field_name="table", datatype=DataType.VARCHAR, max_length=256)
+                    schema.add_field(field_name="column", datatype=DataType.VARCHAR, max_length=256)
+                    
+                    # 索引参数
+                    index_params = self.client.prepare_index_params()
+                    index_params.add_index(
+                        field_name="vector",
+                        index_type="AUTOINDEX",
+                        metric_type="COSINE" 
+                    )
+                    
+                    self.client.create_collection(
+                        collection_name=self.collection_name,
+                        schema=schema,
+                        index_params=index_params
+                    )
+                    print(f"Milvus collection {self.collection_name} created successfully.")
+                
+                self.client.load_collection(self.collection_name)
+                print(f"ValueSearcher initialized for collection: {self.collection_name}")
+                
+            except Exception as e:
+                print(f"Warning: Failed to initialize Milvus for ValueSearcher: {e}")
+                self.client = None
+                
         except Exception as e:
             print(f"Failed to init ValueSearcher vector db: {e}")
+
+    def _embed(self, text: str) -> List[float]:
+        if not self.openai_client:
+            return []
+        try:
+            resp = self.openai_client.embeddings.create(
+                input=[text],
+                model=settings.EMBEDDING_MODEL
+            )
+            return resp.data[0].embedding
+        except Exception as e:
+            print(f"Error generating embedding: {e}")
+            return []
 
     async def index_values(self, tables: List[str] = None, limit_per_column: int = 1000):
         """
@@ -65,41 +116,26 @@ class ValueSearcher:
         :param tables: 指定要扫描的表名列表，如果为 None 则扫描所有表。
         :param limit_per_column: 每列采样的最大唯一值数量。
         """
-        if not self._collection:
+        if not self.client:
             return
 
         try:
             query_db = get_query_db(self.project_id)
             # 获取所有表结构
-            # 简化起见，这里假设我们能获取所有表名
-            # 在实际生产中，应从 SchemaSearcher 或元数据中获取
-            # 使用同步的 _get_sync_engine 或 inspect_schema
-            # 这里的 inspect_schema 已经是同步包装了，可以直接用
-            
-            # 由于 inspect_schema 内部创建了临时 engine，我们应该尽量减少调用次数
-            # 或者将其重构为异步 (目前数据库层只有 inspect_schema 是 sync 的)
-            # 为了不阻塞，我们在 thread 中运行 inspect_schema
             inspector_json = await asyncio.to_thread(query_db.inspect_schema)
             import json
             schema = json.loads(inspector_json)
             
             target_tables = tables if tables else schema.keys()
             
-            ids = []
-            documents = []
-            metadatas = []
+            # 批量收集数据
+            batch_data = []
             
             # 使用异步连接
             async with query_db.async_engine.connect() as conn:
                 for table_full_name in target_tables:
                     # schema keys are "db.table"
                     if table_full_name not in schema: continue
-                    
-                    # 提取纯表名用于 SQL (假设在同一个库或已处理上下文)
-                    # 注意：schema key 是 "db.table"，SQL 需要根据情况处理
-                    # 这里简化处理，直接使用 full name 或者 split
-                    # async_engine 连接的是特定库，如果跨库会比较麻烦
-                    # 假设 target_tables 都在当前连接的库中
                     
                     # 尝试从 full name 解析
                     if "." in table_full_name:
@@ -128,9 +164,6 @@ class ValueSearcher:
                         # 查询去重值
                         try:
                             # 简单的 SQL 防注入处理：使用 text()
-                            # 加上表名引用
-                            # SQL Injection Protection: Validated identifiers above.
-                            # Using f-string here is safer now because we validated the identifiers against a whitelist regex.
                             sql = text(f"SELECT DISTINCT {col} FROM {table_name} WHERE {col} IS NOT NULL LIMIT {limit_per_column}")
                             result = await conn.execute(sql)
                             rows = result.fetchall()
@@ -139,34 +172,32 @@ class ValueSearcher:
                             for val in values:
                                 if len(val) < 2 or len(val) > 100: continue # 过滤过短或过长的值
                                 
+                                vector = self._embed(val)
+                                if not vector: continue
+
                                 # ID: table.col.hash(val)
                                 doc_id = f"{table_full_name}.{col}.{hash(val)}"
                                 
-                                ids.append(doc_id)
-                                documents.append(val)
-                                metadatas.append({"table": table_full_name, "column": col, "value": val})
+                                batch_data.append({
+                                    "id": doc_id,
+                                    "vector": vector,
+                                    "value": val,
+                                    "table": table_full_name,
+                                    "column": col
+                                })
                                 
                         except Exception as e:
                             print(f"Error indexing {table_full_name}.{col}: {e}")
 
-            if ids:
-                print(f"Adding {len(ids)} values to vector index...")
+            if batch_data:
+                print(f"Adding {len(batch_data)} values to vector index...")
                 batch_size = 500
                 
-                def _add_batch(batch_ids, batch_docs, batch_metas):
-                     self._collection.add(
-                        ids=batch_ids,
-                        documents=batch_docs,
-                        metadatas=batch_metas
-                    )
-
-                for i in range(0, len(ids), batch_size):
-                    # 使用 to_thread 异步执行同步的 collection.add
-                    await asyncio.to_thread(
-                        _add_batch,
-                        ids[i:i+batch_size],
-                        documents[i:i+batch_size],
-                        metadatas[i:i+batch_size]
+                for i in range(0, len(batch_data), batch_size):
+                    batch = batch_data[i:i+batch_size]
+                    self.client.upsert(
+                        collection_name=self.collection_name,
+                        data=batch
                     )
                 print("Value indexing complete.")
                 
@@ -177,24 +208,31 @@ class ValueSearcher:
         """
         搜索与 query_value 最相似的数据库真实值。
         """
-        if not self._collection:
+        if not self.client:
             return []
             
         try:
-            results = self._collection.query(
-                query_texts=[query_value],
-                n_results=limit
+            vector = self._embed(query_value)
+            if not vector:
+                return []
+
+            results = self.client.search(
+                collection_name=self.collection_name,
+                data=[vector],
+                limit=limit,
+                output_fields=["value", "table", "column"],
+                search_params={"metric_type": "COSINE"}
             )
             
             matches = []
-            if results['ids'] and len(results['ids']) > 0:
-                for i, doc in enumerate(results['documents'][0]):
-                    meta = results['metadatas'][0][i]
+            if results and results[0]:
+                for match in results[0]:
+                    entity = match['entity']
                     matches.append({
-                        "value": meta["value"],
-                        "table": meta["table"],
-                        "column": meta["column"],
-                        "score": results['distances'][0][i] # Smaller is better for L2
+                        "value": entity["value"],
+                        "table": entity["table"],
+                        "column": entity["column"],
+                        "score": match['distance'] # COSINE similarity
                     })
             return matches
         except Exception as e:

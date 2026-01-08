@@ -13,7 +13,9 @@ class RedisClient:
             pool = redis.ConnectionPool.from_url(
                 settings.REDIS_URL,
                 decode_responses=True, # Automatically decode bytes to strings
-                max_connections=20
+                max_connections=20,
+                socket_timeout=settings.REDIS_SOCKET_TIMEOUT,
+                socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT
             )
             cls._instance = redis.Redis(connection_pool=pool)
         return cls._instance
@@ -24,7 +26,9 @@ class RedisClient:
              pool = sync_redis.ConnectionPool.from_url(
                 settings.REDIS_URL,
                 decode_responses=True,
-                max_connections=20
+                max_connections=20,
+                socket_timeout=settings.REDIS_SOCKET_TIMEOUT,
+                socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT
              )
              cls._sync_instance = sync_redis.Redis(connection_pool=pool)
         return cls._sync_instance

@@ -1,86 +1,125 @@
-import chromadb
 import uuid
 import threading
-from typing import Dict, Any
+from typing import Dict, Any, List
+from openai import OpenAI
+from pymilvus import MilvusClient, DataType
 
 from src.core.config import settings
 
-_REMOTE_UNAVAILABLE = False
-
 class FewShotRetriever:
     """
-    基于 ChromaDB 的 Few-Shot 样本检索器。
+    基于 Milvus 的 Few-Shot 样本检索器。
     用于存储和检索 {Question, DSL, SQL} 三元组，实现动态上下文学习。
     """
     def __init__(self, project_id: int = None):
         self.project_id = project_id
-        self._chroma_client = None
-        self._collection = None
+        self.client = None
+        self.openai_client = None
+        self.collection_name = f"few_shot_examples_{self.project_id}" if self.project_id else "few_shot_examples_common"
         self._init_vector_db()
 
     def _init_vector_db(self):
         try:
-            global _REMOTE_UNAVAILABLE
-            if settings.CHROMA_USE_REMOTE and not _REMOTE_UNAVAILABLE:
-                try:
-                    print(f"Connecting to remote ChromaDB at {settings.CHROMA_SERVER_HOST}:{settings.CHROMA_SERVER_PORT}...")
-                    self._chroma_client = chromadb.HttpClient(
-                        host=settings.CHROMA_SERVER_HOST, 
-                        port=settings.CHROMA_SERVER_PORT
-                    )
-                    # 测试连接
-                    self._chroma_client.heartbeat()
-                    print("Successfully connected to remote ChromaDB.")
-                except Exception as e:
-                    print(f"Warning: Failed to connect to remote ChromaDB ({e}), falling back to EphemeralClient.")
-                    _REMOTE_UNAVAILABLE = True
-                    self._chroma_client = chromadb.EphemeralClient()
-            elif settings.CHROMA_USE_REMOTE and _REMOTE_UNAVAILABLE:
-                # 远端不可用时，直接使用 Ephemeral，避免重复连接与日志噪声
-                self._chroma_client = chromadb.EphemeralClient()
-            else:
-                # 尝试使用持久化客户端
-                try:
-                    self._chroma_client = chromadb.PersistentClient(path="./chroma_db_fewshot")
-                except Exception as e:
-                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
-                    self._chroma_client = chromadb.EphemeralClient()
-            
-            # 每个项目使用独立的 Collection，或者是全局共享的 "common_examples"
-            collection_name = f"few_shot_examples_{self.project_id}" if self.project_id else "few_shot_examples_common"
+            # 初始化 OpenAI 客户端 (用于 Embedding)
             try:
-                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
-            except Exception:
-                self._chroma_client = chromadb.EphemeralClient()
-                self._collection = self._chroma_client.get_or_create_collection(name=collection_name)
-            print(f"FewShotRetriever initialized for collection: {collection_name}")
+                self.openai_client = OpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    base_url=settings.OPENAI_API_BASE
+                )
+            except Exception as e:
+                print(f"Warning: Failed to initialize OpenAI client for FewShotRetriever: {e}")
+                return
+
+            # 初始化 Milvus 客户端
+            try:
+                uri = f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}"
+                print(f"FewShotRetriever: Connecting to Milvus at {uri}...")
+                self.client = MilvusClient(
+                    uri=uri,
+                    token=settings.MILVUS_TOKEN,
+                    db_name=settings.MILVUS_DB_NAME
+                )
+                
+                # 检查并创建集合
+                if not self.client.has_collection(self.collection_name):
+                    print(f"Creating Milvus collection: {self.collection_name}")
+                    # 定义 Schema
+                    schema = MilvusClient.create_schema(
+                        auto_id=False,
+                        enable_dynamic_field=True,
+                    )
+                    # 字段定义
+                    schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=128, is_primary=True)
+                    schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=settings.EMBEDDING_DIM)
+                    schema.add_field(field_name="question", datatype=DataType.VARCHAR, max_length=65535)
+                    schema.add_field(field_name="dsl", datatype=DataType.VARCHAR, max_length=65535)
+                    schema.add_field(field_name="sql", datatype=DataType.VARCHAR, max_length=65535)
+                    
+                    # 索引参数
+                    index_params = self.client.prepare_index_params()
+                    index_params.add_index(
+                        field_name="vector",
+                        index_type="AUTOINDEX",
+                        metric_type="COSINE" 
+                    )
+                    
+                    self.client.create_collection(
+                        collection_name=self.collection_name,
+                        schema=schema,
+                        index_params=index_params
+                    )
+                    print(f"Milvus collection {self.collection_name} created successfully.")
+                
+                self.client.load_collection(self.collection_name)
+                print(f"FewShotRetriever initialized for collection: {self.collection_name}")
+                
+            except Exception as e:
+                print(f"Warning: Failed to initialize Milvus for FewShotRetriever: {e}")
+                self.client = None
+                
         except Exception as e:
             print(f"Failed to init FewShotRetriever: {e}")
+
+    def _embed(self, text: str) -> List[float]:
+        if not self.openai_client:
+            return []
+        try:
+            resp = self.openai_client.embeddings.create(
+                input=[text],
+                model=settings.EMBEDDING_MODEL
+            )
+            return resp.data[0].embedding
+        except Exception as e:
+            print(f"Error generating embedding: {e}")
+            return []
 
     def add_example(self, question: str, dsl: str, sql: str, metadata: Dict[str, Any] = None):
         """
         添加一个新的样本。
         """
-        if not self._collection:
+        if not self.client:
             return
 
         try:
+            vector = self._embed(question)
+            if not vector:
+                return
+
             # ID: uuid
             doc_id = str(uuid.uuid4())
             
-            # Metadata
-            meta = {
+            data = [{
+                "id": doc_id,
+                "vector": vector,
                 "question": question,
-                "dsl": dsl, # 存储 DSL 以供参考
-                "sql": sql  # 存储 SQL 以供参考
-            }
-            if metadata:
-                meta.update(metadata)
+                "dsl": dsl,
+                "sql": sql,
+                **(metadata or {})
+            }]
                 
-            self._collection.add(
-                ids=[doc_id],
-                documents=[question], # 我们对问题进行 Embed
-                metadatas=[meta]
+            self.client.upsert(
+                collection_name=self.collection_name,
+                data=data
             )
             print(f"Added few-shot example: {question[:30]}...")
         except Exception as e:
@@ -90,24 +129,31 @@ class FewShotRetriever:
         """
         检索 Top-K 相似样本，并格式化为 Prompt 字符串。
         """
-        if not self._collection:
+        if not self.client:
             return ""
             
         try:
-            results = self._collection.query(
-                query_texts=[query],
-                n_results=k
+            vector = self._embed(query)
+            if not vector:
+                return ""
+
+            results = self.client.search(
+                collection_name=self.collection_name,
+                data=[vector],
+                limit=k,
+                output_fields=["question", "dsl", "sql"],
+                search_params={"metric_type": "COSINE"}
             )
             
-            if not results['ids'] or len(results['ids'][0]) == 0:
+            if not results or not results[0]:
                 return ""
             
             examples_str = "**参考案例 (Few-Shot Examples):**\n"
             
-            for i, doc in enumerate(results['documents'][0]):
-                meta = results['metadatas'][0][i]
-                question = meta.get("question", "")
-                dsl = meta.get("dsl", "")
+            for i, match in enumerate(results[0]):
+                entity = match['entity']
+                question = entity.get("question", "")
+                dsl = entity.get("dsl", "")
                 
                 # 格式化为一个清晰的 Example Block
                 examples_str += (

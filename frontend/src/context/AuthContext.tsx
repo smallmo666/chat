@@ -35,6 +35,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const response = await api.post('/api/auth/me');
           setUser(response.data);
         } catch (error) {
+          console.error("Auth initialization failed:", error);
           localStorage.removeItem('token');
         }
       }

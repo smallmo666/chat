@@ -28,11 +28,8 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
             const taskIndex = newTasks.findIndex(t => t.id === node);
             
             if (taskIndex !== -1) {
-                // Keep description simple for data logic, UI can render Tag if needed
-                // But since we are passing React Nodes in types, we keep it for now
                 let desc: React.ReactNode = details || '完成';
                 if (details && details.length > 50) {
-                     // We can keep using Tag here as it's part of the TaskItem type definition which allows ReactNode
                      desc = <Tag color="blue" style={{whiteSpace: 'normal', wordBreak: 'break-all'}}>{details}</Tag>;
                 }
                 
@@ -56,43 +53,36 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
         // Also update the plan in the message history
         setMessages(prev => {
             const newMsgs = [...prev];
-            // Reverse search for the plan message
-            let planMsgIndex = -1;
-            for (let i = newMsgs.length - 1; i >= 0; i--) {
-                if (newMsgs[i].plan) {
-                    planMsgIndex = i;
-                    break;
-                }
-            }
+            const lastMsg = newMsgs[newMsgs.length - 1];
+            if (lastMsg && lastMsg.role === 'agent') {
+                 const planMsg = { ...lastMsg };
+                 if (planMsg.plan) {
+                    const newPlan = [...planMsg.plan];
+                    const taskIndex = newPlan.findIndex(t => t.id === node);
 
-            if (planMsgIndex !== -1) {
-                const planMsg = { ...newMsgs[planMsgIndex] };
-                const newPlan = [...(planMsg.plan || [])];
-                const taskIndex = newPlan.findIndex(t => t.id === node);
-
-                if (taskIndex !== -1) {
-                    let desc: React.ReactNode = details || '完成';
-                    if (details && details.length > 50) {
-                         desc = <Tag color="blue" style={{whiteSpace: 'normal', wordBreak: 'break-all'}}>{details}</Tag>;
-                    }
-
-                    newPlan[taskIndex] = {
-                        ...newPlan[taskIndex],
-                        status: 'finish',
-                        description: desc,
-                        duration: duration
-                    };
-
-                    if (taskIndex + 1 < newPlan.length) {
-                        if (newPlan[taskIndex + 1].status === 'pending') {
-                            newPlan[taskIndex + 1].status = 'process';
-                            newPlan[taskIndex + 1].description = <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag>;
+                    if (taskIndex !== -1) {
+                        let desc: React.ReactNode = details || '完成';
+                        if (details && details.length > 50) {
+                             desc = <Tag color="blue" style={{whiteSpace: 'normal', wordBreak: 'break-all'}}>{details}</Tag>;
                         }
+
+                        newPlan[taskIndex] = {
+                            ...newPlan[taskIndex],
+                            status: 'finish',
+                            description: desc,
+                            duration: duration
+                        };
+
+                        if (taskIndex + 1 < newPlan.length) {
+                            if (newPlan[taskIndex + 1].status === 'pending') {
+                                newPlan[taskIndex + 1].status = 'process';
+                                newPlan[taskIndex + 1].description = <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag>;
+                            }
+                        }
+                        planMsg.plan = newPlan;
+                        newMsgs[newMsgs.length - 1] = planMsg;
                     }
-                    
-                    planMsg.plan = newPlan;
-                    newMsgs[planMsgIndex] = planMsg;
-                }
+                 }
             }
             return newMsgs;
         });
@@ -101,19 +91,27 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
     const sendMessage = useCallback(async (userMsg: string, checkedKeys: any[] = [], command: string = "start", modifiedSql?: string) => {
         const selectedTables = checkedKeys.filter(k => typeof k === 'string' && !k.toString().includes('.'));
         lastRequestRef.current = { userMsg, checkedKeys, command, modifiedSql };
+        
+        // Add User Message
         setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+        
         setIsLoading(true);
         setLatestData([]);
+        
+        // Add Agent Placeholder Message
         setMessages(prev => [...prev, { role: 'agent', thinking: '', content: '' }]);
+        
         setTasks([
           { id: 'planning', title: '正在规划...', status: 'process', description: <Tag color="processing" icon={<LoadingOutlined />}>AI 思考中</Tag> },
         ]);
+
         const token = localStorage.getItem('token');
         if (!token) {
             message.error('请先登录');
             setIsLoading(false);
             return;
         }
+
         const startStream = async (retry = false) => {
             const response = await fetch(ENDPOINTS.CHAT, {
                 method: 'POST',
@@ -132,36 +130,57 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                     modified_sql: modifiedSql
                 }),
             });
+
             if (response.status === 401) {
                 message.error('会话已过期，请重新登录');
                 setIsLoading(false);
                 return;
             }
+
             if (onSessionCreated) {
                 setTimeout(onSessionCreated, 1000);
             }
+
             if (!response.body) return;
+
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
             let thinkingBuffer = '';
             let lastThinkingFlush = 0;
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) {
                     setIsLoading(false);
                     break;
                 }
+
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n\n');
                 buffer = lines.pop() || '';
+
                 for (const line of lines) {
                     if (!line.startsWith('event: ')) continue;
                     const eventType = line.split('\n')[0].replace('event: ', '').trim();
                     const dataStr = line.split('\n')[1]?.replace('data: ', '').trim();
                     if (!dataStr) continue;
+
                     try {
                         const data = JSON.parse(dataStr);
+                        
+                        // Helper to update the last agent message
+                        const updateLastAgentMessage = (updater: (msg: Message) => Message) => {
+                            setMessages(prev => {
+                                const newMsgs = [...prev];
+                                const lastIndex = newMsgs.length - 1;
+                                if (lastIndex >= 0 && newMsgs[lastIndex].role === 'agent') {
+                                    newMsgs[lastIndex] = updater(newMsgs[lastIndex]);
+                                }
+                                return newMsgs;
+                            });
+                        };
+
                         if (eventType === 'thinking') {
                             thinkingBuffer += data.content;
                             const now = performance.now();
@@ -169,17 +188,10 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                 const chunk = thinkingBuffer;
                                 thinkingBuffer = '';
                                 lastThinkingFlush = now;
-                                setMessages(prev => {
-                                    const newMsgs = [...prev];
-                                    const lastMsg = newMsgs[newMsgs.length - 1];
-                                    if (lastMsg && lastMsg.role === 'agent') {
-                                        newMsgs[newMsgs.length - 1] = {
-                                            ...lastMsg,
-                                            thinking: (lastMsg.thinking || '') + chunk
-                                        };
-                                    }
-                                    return newMsgs;
-                                });
+                                updateLastAgentMessage(msg => ({
+                                    ...msg,
+                                    thinking: (msg.thinking || '') + chunk
+                                }));
                             }
                         } else if (eventType === 'plan') {
                             const newTasks: TaskItem[] = data.content.map((step: any, index: number) => ({
@@ -187,154 +199,173 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                 title: step.desc,
                                 status: index === 0 ? 'process' : 'pending',
                                 description: index === 0 ? <Tag color="processing" icon={<SyncOutlined spin />}>执行中...</Tag> : '等待中',
-                                logs: []
+                                logs: [],
+                                subtasks: []
                             }));
                             setTasks(newTasks);
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent' && !lastMsg.content && !lastMsg.plan && !lastMsg.thinking) {
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, plan: newTasks };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', plan: newTasks });
-                                }
-                                return newMsgs;
-                            });
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                plan: newTasks
+                            }));
                         } else if (eventType === 'substep') {
                             const { node, step, detail, ts } = data;
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                const logItem = { node, step, detail, ts };
-                                if (lastMsg && lastMsg.role === 'agent') {
-                                    const logs = (lastMsg.actionLogs || []).concat([logItem]);
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, actionLogs: logs };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', actionLogs: [logItem] });
+                            // Update global tasks
+                            setTasks(prev => {
+                                const newTasks = [...prev];
+                                const taskIndex = newTasks.findIndex(t => t.id === node);
+                                if (taskIndex !== -1) {
+                                    const currentTask = newTasks[taskIndex];
+                                    const newSubtasks = [...(currentTask.subtasks || [])];
+                                    newSubtasks.push({
+                                        id: `${node}-${step}-${ts}`,
+                                        title: step,
+                                        status: 'finish',
+                                        description: detail,
+                                        startTime: ts,
+                                        endTime: ts,
+                                        duration: 0
+                                    });
+                                    newTasks[taskIndex] = { ...currentTask, subtasks: newSubtasks };
                                 }
-                                return newMsgs;
+                                return newTasks;
                             });
+
+                            // Update message plan
+                            updateLastAgentMessage(msg => {
+                                const newPlan = msg.plan ? [...msg.plan] : [];
+                                const taskIndex = newPlan.findIndex(t => t.id === node);
+                                if (taskIndex !== -1) {
+                                    const currentTask = newPlan[taskIndex];
+                                    const newSubtasks = [...(currentTask.subtasks || [])];
+                                    newSubtasks.push({
+                                        id: `${node}-${step}-${ts}`,
+                                        title: step,
+                                        status: 'finish',
+                                        description: detail,
+                                        startTime: ts,
+                                        endTime: ts,
+                                        duration: 0
+                                    });
+                                    newPlan[taskIndex] = { ...currentTask, subtasks: newSubtasks };
+                                }
+                                const newLogs = [...(msg.actionLogs || [])];
+                                newLogs.push({ node, step, detail, ts });
+                                return { ...msg, plan: newPlan, actionLogs: newLogs };
+                            });
+
                         } else if (eventType === 'step') {
                             updateStepStatus(data.node, data.status, data.details, data.duration);
                         } else if (eventType === 'interrupt') {
-                            setMessages(prev => [...prev, { role: 'agent', content: data.content, interrupt: true }]);
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                content: data.content,
+                                interrupt: true
+                            }));
                             setIsLoading(false);
                         } else if (eventType === 'detective_insight') {
                             const { hypotheses, depth } = data;
-                            setMessages(prev => [...prev, { role: 'agent', content: '', hypotheses, analysisDepth: depth }]);
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                detectiveInsight: { hypotheses, depth } // Use object structure as per Message type
+                            }));
                         } else if (eventType === 'insight_mined') {
                             const insights = data.content;
-                            setMessages(prev => [...prev, { role: 'agent', content: '', insights }]);
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                insights
+                            }));
                         } else if (eventType === 'ui_generated') {
                             const code = data.content;
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent' && !lastMsg.uiComponent) {
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, uiComponent: code };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', uiComponent: code });
-                                }
-                                return newMsgs;
-                            });
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                uiComponent: code
+                            }));
                         } else if (eventType === 'python_images') {
                             const images = data.content;
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent') {
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, images };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', images });
-                                }
-                                return newMsgs;
-                            });
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                images
+                            }));
                         } else if (eventType === 'code_generated') {
                             const codeContent = `\`\`\`python\n${data.content}\n\`\`\``;
-                            setMessages(prev => [...prev, { role: 'agent', content: codeContent, isCode: true }]);
+                             updateLastAgentMessage(msg => ({
+                                ...msg,
+                                content: (msg.content || '') + '\n\n' + codeContent, // Append code to content? Or use isCode?
+                                isCode: true
+                            }));
+                            // Actually, if we append to content, it might duplicate if we also use 'content' event.
+                            // But usually code_generated is separate. 
+                            // Let's stick to appending or storing in a separate field if needed.
+                            // The original code created a NEW message for code.
+                            // To keep single bubble, we can append to `content`.
                         } else if (eventType === 'result') {
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent') {
-                                    let clarification = undefined;
-                                    let content = data.content;
-                                    try {
-                                        if (typeof content === 'string') {
-                                            const trimmed = content.trim();
-                                            let jsonStr: string | null = null;
-                                            if (trimmed.startsWith('```json')) {
-                                                jsonStr = trimmed.replace(/```json\s*|\s*```/g, '').trim();
-                                            } else if (trimmed.startsWith('{')) {
-                                                jsonStr = trimmed;
-                                            } else {
-                                                const match = trimmed.match(/\{[\s\S]*\}/);
-                                                jsonStr = match ? match[0] : null;
-                                            }
-                                            if (jsonStr) {
-                                                const parsed = JSON.parse(jsonStr);
-                                                if (parsed.status === 'AMBIGUOUS') {
-                                                    clarification = parsed;
-                                                    content = '';
-                                                }
+                            updateLastAgentMessage(msg => {
+                                let clarification = undefined;
+                                let content = data.content;
+                                try {
+                                    if (typeof content === 'string') {
+                                        const trimmed = content.trim();
+                                        let jsonStr: string | null = null;
+                                        if (trimmed.startsWith('```json')) {
+                                            jsonStr = trimmed.replace(/```json\s*|\s*```/g, '').trim();
+                                        } else if (trimmed.startsWith('{')) {
+                                            jsonStr = trimmed;
+                                        } else {
+                                            const match = trimmed.match(/\{[\s\S]*\}/);
+                                            jsonStr = match ? match[0] : null;
+                                        }
+                                        if (jsonStr) {
+                                            const parsed = JSON.parse(jsonStr);
+                                            if (parsed.status === 'AMBIGUOUS') {
+                                                clarification = parsed;
+                                                content = '';
                                             }
                                         }
-                                    } catch (e) {
-                                        // Ignore parse error, treat as text
                                     }
-
-                                    newMsgs[newMsgs.length - 1] = { 
-                                        ...lastMsg, 
-                                        content,
-                                        clarification
-                                    };
+                                } catch (e) {
+                                    // Ignore parse error
                                 }
-                                return newMsgs;
+                                return {
+                                    ...msg,
+                                    content,
+                                    clarification
+                                };
                             });
                         } else if (eventType === 'clarification') {
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent') {
-                                    newMsgs[newMsgs.length - 1] = { 
-                                        ...lastMsg, 
-                                        clarification: data.content 
-                                    };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', clarification: data.content });
-                                }
-                                return newMsgs;
-                            });
+                             updateLastAgentMessage(msg => ({
+                                ...msg,
+                                clarification: data.content
+                            }));
                         } else if (eventType === 'data_export') {
                             setLatestData(data.content);
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent') {
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, data: data.content };
-                                }
-                                return newMsgs;
-                            });
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                data: data.content
+                            }));
                         } else if (eventType === 'data_download') {
                             const token = data.content;
-                            setMessages(prev => [...prev, { role: 'agent', content: '', downloadToken: token }]);
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                downloadToken: token
+                            }));
                         } else if (eventType === 'analysis') {
-                            setMessages(prev => [...prev, { role: 'agent', content: data.content, isAnalysis: true }]);
+                            updateLastAgentMessage(msg => ({
+                                ...msg,
+                                content: (msg.content || '') + '\n\n' + data.content,
+                                isAnalysis: true
+                            }));
                         } else if (eventType === 'visualization') {
                             const vizData = data.content;
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                const lastMsg = newMsgs[newMsgs.length - 1];
-                                if (lastMsg && lastMsg.role === 'agent' && !lastMsg.content && !lastMsg.thinking && !lastMsg.vizOption) {
-                                    newMsgs[newMsgs.length - 1] = { ...lastMsg, vizOption: vizData.option || vizData };
-                                } else {
-                                    newMsgs.push({ role: 'agent', content: '', vizOption: vizData.option || vizData });
-                                }
-                                return newMsgs;
-                            });
+                             updateLastAgentMessage(msg => ({
+                                ...msg,
+                                vizOption: vizData.option || vizData
+                            }));
                             setIsLoading(false);
                         } else if (eventType === 'error') {
-                            setMessages(prev => [...prev, { role: 'agent', content: `Error: ${data.content}` }]);
+                             updateLastAgentMessage(msg => ({
+                                ...msg,
+                                content: (msg.content || '') + `\n\nError: ${data.content}`
+                            }));
                             setIsLoading(false);
                         }
                     } catch (e) {
@@ -343,6 +374,7 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                 }
             }
         };
+
         try {
             await startStream(false);
         } catch (error) {

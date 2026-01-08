@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union, Dict, Any
 from pydantic import BaseModel
 
 # --- DataSource Schemas ---
@@ -43,7 +43,7 @@ class ChatRequest(BaseModel):
     
     # HITL Control
     command: Optional[str] = "start"
-    modified_sql: Optional[str] = None
+    modified_sql: Optional[Union[str, Dict[str, Any]]] = None
 
 class PythonExecRequest(BaseModel):
     code: str
@@ -51,7 +51,7 @@ class PythonExecRequest(BaseModel):
 
 # --- Session Management Schemas ---
 class SessionListRequest(BaseModel):
-    project_id: int
+    project_id: Optional[int] = None
 
 class SessionHistoryRequest(BaseModel):
     session_id: str

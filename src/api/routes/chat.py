@@ -3,7 +3,7 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Optional, List
+from typing import AsyncGenerator, Optional, List, Union
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
@@ -13,11 +13,16 @@ from src.core.database import get_app_db
 from src.core.models import AuditLog, User, ChatSession
 from src.utils.callbacks import UIStreamingCallbackHandler
 from src.api.schemas import (
-    ChatRequest
+    ChatRequest,
+    SessionListRequest,
+    SessionHistoryRequest,
+    SessionUpdateRequest,
+    SessionDeleteRequest
 )
 # Import auth dependency
 from src.core.security_auth import get_current_active_user
 from src.core.event_bus import EventBus
+from sqlmodel import select
 
 router = APIRouter(tags=["chat"])
 
@@ -36,9 +41,9 @@ async def event_generator(
     selected_tables: Optional[list[str]], 
     thread_id: str, 
     project_id: Optional[int],
-    user_id: Optional[int], # Added user_id
+    user_id: Optional[int],
     command: str = "start",
-    modified_sql: Optional[str] = None,
+    modified_sql: Optional[Union[str, dict]] = None,
     clarify_choices: Optional[List[str]] = None
 ) -> AsyncGenerator[str, None]:
     """
@@ -106,7 +111,7 @@ async def event_generator(
                     return
 
                 if modified_sql:
-                    await graph_app.aupdate_state(config, {"sql": modified_sql})
+                    await graph_app.aupdate_state(config, {"sql": modified_sql}, as_node="DSLtoSQL")
                 inputs = None # Resume
             elif command == "approve":
                 # Check if state exists before resuming
@@ -129,13 +134,29 @@ async def event_generator(
                 prev_msgs = snapshot.values.get("messages", [])
                 new_msgs = prev_msgs + ([HumanMessage(content=message)] if message else [])
                 retry = int(snapshot.values.get("clarify_retry_count", 0) or 0) + 1
-                await graph_app.aupdate_state(config, {
+                
+                update_payload = {
                     "messages": new_msgs,
                     "clarify_pending": False,
                     "clarify_retry_count": retry
-                })
-                if clarify_choices:
-                    await graph_app.aupdate_state(config, {"clarify_answer": {"choices": clarify_choices}})
+                }
+                
+                # Handle modified_sql being a dictionary (e.g. clarify choices passed as sql)
+                # or a string (actual SQL edit)
+                if modified_sql:
+                    if isinstance(modified_sql, dict):
+                        # Extract choices if present
+                        if "clarify_choices" in modified_sql:
+                            update_payload["clarify_answer"] = {"choices": modified_sql["clarify_choices"]}
+                            update_payload["intent_clear"] = True
+                    else:
+                        update_payload["sql"] = modified_sql
+                        update_payload["intent_clear"] = True # Assume manual SQL fixes intent
+                elif clarify_choices:
+                    update_payload["clarify_answer"] = {"choices": clarify_choices}
+                    update_payload["intent_clear"] = True
+                    
+                await graph_app.aupdate_state(config, update_payload, as_node="ClarifyIntent")
                 inputs = None
             
             step_start_time = time.time()
@@ -365,11 +386,14 @@ async def event_generator(
                         project_id=project_id,
                         user_id=user_id,
                         session_id=thread_id,
-                        query=message,
-                        sql_query=audit_data["executed_sql"],
-                        execution_time_ms=total_duration,
-                        status="success",
-                        result_summary=audit_data["result_summary"]
+                        user_query=message,
+                        plan={"steps": audit_data.get("plan", [])} if isinstance(audit_data.get("plan"), list) else audit_data.get("plan"),
+                        executed_sql=audit_data.get("executed_sql"),
+                        generated_dsl=audit_data.get("generated_dsl"),
+                        result_summary=audit_data.get("result_summary"),
+                        duration_ms=total_duration,
+                        status=audit_data.get("status", "success"),
+                        error_message=None
                     )
                     session.add(log)
                     session.commit()
@@ -389,10 +413,10 @@ async def event_generator(
                         project_id=project_id,
                         user_id=user_id,
                         session_id=thread_id,
-                        query=message,
+                        user_query=message,
                         status="error",
                         error_message=str(e),
-                        execution_time_ms=0
+                        duration_ms=0
                     )
                     session.add(log)
                     session.commit()
@@ -459,3 +483,74 @@ async def chat_endpoint(
         ),
         media_type="text/event-stream"
     )
+
+@router.post("/chat/sessions/list")
+def list_sessions(
+    req: SessionListRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    
+    if req.project_id is None:
+        return []
+
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        rows = session.exec(
+            select(ChatSession)
+            .where(
+                ChatSession.user_id == current_user.id,
+                ChatSession.project_id == req.project_id,
+                ChatSession.is_active == True
+            )
+            .order_by(ChatSession.updated_at.desc())
+        ).all()
+        return rows
+
+@router.post("/chat/sessions/history")
+def session_history(
+    req: SessionHistoryRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        logs = session.exec(
+            select(AuditLog)
+            .where(
+                AuditLog.session_id == req.session_id,
+                AuditLog.user_id == current_user.id
+            )
+            .order_by(AuditLog.created_at.desc())
+        ).all()
+        return logs
+
+@router.post("/chat/sessions/update")
+def update_session_title(
+    req: SessionUpdateRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        s = session.get(ChatSession, req.session_id)
+        if not s or s.user_id != current_user.id:
+            return {"success": False}
+        s.title = req.title.strip() or s.title
+        s.updated_at = datetime.utcnow()
+        session.add(s)
+        session.commit()
+        return {"success": True}
+
+@router.post("/chat/sessions/delete")
+def delete_session(
+    req: SessionDeleteRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    app_db = get_app_db()
+    with app_db.get_session() as session:
+        s = session.get(ChatSession, req.session_id)
+        if not s or s.user_id != current_user.id:
+            return {"success": False}
+        s.is_active = False
+        s.updated_at = datetime.utcnow()
+        session.add(s)
+        session.commit()
+        return {"success": True}

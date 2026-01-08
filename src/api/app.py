@@ -7,7 +7,9 @@ os.environ['MPLCONFIGDIR'] = os.path.join(os.getcwd(), '.matplotlib_cache')
 os.makedirs(os.environ['MPLCONFIGDIR'], exist_ok=True)
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.api.middleware.rate_limit import RateLimitMiddleware
@@ -44,6 +46,18 @@ from src.api.routes import query
 warnings.filterwarnings("ignore")
 
 app = FastAPI(title="Text2SQL Agent API")
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(f"Validation Error for {request.url}: {exc.errors()}")
+    try:
+        body = await request.json()
+        print(f"Request Body: {body}")
+    except:
+        pass
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": "See server logs for request body"},
+    )
 
 # CORS Configuration
 app.add_middleware(

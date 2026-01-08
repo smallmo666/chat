@@ -35,6 +35,9 @@ export type TaskItem = {
   description?: React.ReactNode;
   duration?: number;
   logs?: string[];
+  subtasks?: TaskItem[];
+  startTime?: number;
+  endTime?: number;
 }
 
 export type TableColumn = {

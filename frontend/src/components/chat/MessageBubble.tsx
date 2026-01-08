@@ -25,6 +25,7 @@ import SqlReviewPanel from './SqlReviewPanel';
 import DataDownloadCard from './DataDownloadCard';
 import MessageAnimation from './MessageAnimation';
 import AccessibilityWrapper from '../common/AccessibilityWrapper';
+import TaskTimeline from '../TaskTimeline';
 import type { Message } from '../../chatTypes';
 
 const { useToken } = theme;
@@ -72,8 +73,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
     isDarkMode = false
 }) => {
     const { token } = useToken();
-    const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
-    const [viewingPlan, setViewingPlan] = useState<string[]>([]);
     const [isReviewOpen, setIsReviewOpen] = useState(false);
     const [editableSql, setEditableSql] = useState('');
     const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
@@ -268,8 +267,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                         border: item.role === 'user' ? 'none' : '1px solid var(--border-color)',
                         background: item.role === 'user' ? `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryActive} 100%)` : 'var(--bg-container)'
                     }}>
-                        {/* Thinking Process / Substeps (Action Logs) */}
-                        {item.role === 'agent' && (item.thinking || (item.actionLogs && item.actionLogs.length > 0)) && (
+                        {/* Execution Process / Plan / Thinking */}
+                        {item.role === 'agent' && (item.plan || item.thinking || (item.actionLogs && item.actionLogs.length > 0)) && (
                             <MessageContentCard
                                 type="thinking"
                                 title="执行过程"
@@ -278,28 +277,27 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                 defaultExpanded={true}
                             >
                                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                                    <ThinkingAnimation isVisible={isLoading && isLastMessage} />
-                                    {/* Substeps Rendering */}
-                                    {item.actionLogs && item.actionLogs.length > 0 && (
-                                        <div style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                            {item.actionLogs.map((log, idx) => (
-                                                <div key={idx} style={{ 
-                                                    display: 'flex', alignItems: 'center', gap: 8,
-                                                    padding: '4px 8px', background: 'rgba(0,0,0,0.02)', borderRadius: 4,
-                                                    fontSize: 13
-                                                }}>
-                                                    <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '18px' }}>{log.node}</Tag>
-                                                    <span style={{ fontWeight: 500 }}>{log.detail}</span>
-                                                    {log.metrics && Object.keys(log.metrics).length > 0 && (
-                                                        <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
-                                                            ({Object.entries(log.metrics).map(([k, v]) => `${k}: ${v}`).join(', ')})
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            ))}
+                                    {/* Task Timeline */}
+                                    {item.plan && item.plan.length > 0 && (
+                                        <div style={{ marginBottom: 16 }}>
+                                            <TaskTimeline tasks={item.plan} />
                                         </div>
                                     )}
-                                    {item.thinking}
+
+                                    {/* Thinking Text */}
+                                    {item.thinking && (
+                                        <div style={{ 
+                                            padding: '8px 12px', 
+                                            background: 'rgba(0,0,0,0.02)', 
+                                            borderRadius: 8,
+                                            borderLeft: '2px solid var(--primary-color)'
+                                        }}>
+                                            <div style={{ fontWeight: 500, marginBottom: 4, fontSize: 12, color: 'var(--text-tertiary)' }}>思维链</div>
+                                            {item.thinking}
+                                        </div>
+                                    )}
+
+                                    <ThinkingAnimation isVisible={isLoading && isLastMessage} />
                                 </div>
                             </MessageContentCard>
                         )}
@@ -386,29 +384,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                             paddingLeft: 4
                         }}>
                              <Space size="small">
-                                {item.plan && (
-                                    <Tooltip title="查看执行计划">
-                                        <Button 
-                                            className="message-feedback-btn"
-                                            type="text" 
-                                            size="small" 
-                                            icon={<PartitionOutlined />} 
-                                            style={{ 
-                                                color: 'var(--text-tertiary)', 
-                                                fontSize: 13
-                                            }}
-                                            onClick={() => {
-                                                if (item.plan) {
-                                                    setViewingPlan(item.plan);
-                                                    setIsPlanModalOpen(true);
-                                                }
-                                            }}
-                                            data-icon="partition"
-                                        >
-                                            计划
-                                        </Button>
-                                    </Tooltip>
-                                )}
                                 <Tooltip title="有帮助">
                                     <Button 
                                         className="message-feedback-btn"
@@ -503,6 +478,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
 }, (prev, next) => {
     // 关键优化：Deep comparison for substeps updates
     if (prev.item.actionLogs?.length !== next.item.actionLogs?.length) return false;
+    if (prev.item.plan?.length !== next.item.plan?.length) return false;
+    // Check subtasks length change in plan
+    if (prev.item.plan && next.item.plan) {
+        if (prev.item.plan.some((t, i) => t.subtasks?.length !== next.item.plan![i].subtasks?.length)) return false;
+    }
     if (prev.item.thinking !== next.item.thinking) return false;
     
     if (prev.isDarkMode !== next.isDarkMode) return false;

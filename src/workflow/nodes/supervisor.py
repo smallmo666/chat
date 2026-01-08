@@ -38,15 +38,38 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
                 "interrupt_pending": True
             }
         if intent_clear is False:
+            # Check if user has already provided an answer (this overrides intent_clear=False)
+            if state.get("clarify_answer"):
+                print("DEBUG: Supervisor - Clarify answer present, overriding intent_clear=False and proceeding.")
+                # If plan is empty (which happens if clarification occurred before SelectTables/GenerateDSL),
+                # we must route to the next logical step, usually SelectTables or Planner.
+                # Since clarification usually happens when intent is ambiguous before table selection, 
+                # and based on user log, the next expected node is SelectTables.
+                if not plan:
+                    print("DEBUG: Supervisor - No plan after clarification, routing to SelectTables.")
+                    return {"next": "SelectTables"}
+                
+                # If plan exists, we fall through to let the plan continue execution.
+                pass 
             # 若刚执行 ClarifyIntent 或已有澄清挂起，则不再路由 ClarifyIntent，挂起等待选择或自动兜底
-            if (last_executed == "ClarifyIntent") or clarify_payload or clarify_pending:
+            elif (last_executed == "ClarifyIntent") or clarify_payload or clarify_pending:
+                # Calculate rewind index to ensure we retry the current step after clarification
+                # If we are at step X (current_index), and we halt, we want to resume at step X (or the step that triggered clarify)
+                # Usually, ClarifyIntent is inserted dynamically or we are just pausing before executing the plan step.
+                # So we should keep current_index as is, or ensure we don't increment it prematurely.
+                # However, the return value of supervisor usually sets state update.
+                # If we return "next": "FINISH", we are not updating current_step_index in the state (unless we explicitly return it).
+                # But to be safe and explicit:
+                rewind_index = current_index 
+                
                 # 设置挂起
                 if not clarify_pending:
                     print("DEBUG: Supervisor - Clarify pending set. Halting plan for user selection.")
                     return {
                         "next": "FINISH",
                         "clarify_pending": True,
-                        "clarify_retry_count": clarify_retry
+                        "clarify_retry_count": clarify_retry,
+                        "current_step_index": rewind_index # Explicitly keep index
                     }
                 # 自动兜底：超过重试上限时进行自动选择
                 if clarify_pending and clarify_retry >= 1:

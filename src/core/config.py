@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     
     # Embedding
     EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", env="EMBEDDING_MODEL")
+    EMBEDDING_DIM: int = Field(default=1536, env="EMBEDDING_DIM")
+    ENABLE_SEMANTIC_CACHE: bool = Field(default=False, env="ENABLE_SEMANTIC_CACHE")
 
     # CORS
     CORS_ORIGINS: list[str] = Field(default=["*"], env="CORS_ORIGINS")
@@ -33,12 +35,14 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     REDIS_SCHEMA_TTL: int = Field(default=3600, env="REDIS_SCHEMA_TTL")
     REDIS_SQL_TTL: int = Field(default=300, env="REDIS_SQL_TTL")
+    REDIS_SOCKET_TIMEOUT: int = Field(default=30, env="REDIS_SOCKET_TIMEOUT")
     QUERY_CACHE_TTL: int = Field(default=600, env="QUERY_CACHE_TTL")
     
-    # ChromaDB (Remote)
-    CHROMA_SERVER_HOST: str = Field(default="159.75.148.55", env="CHROMA_SERVER_HOST")
-    CHROMA_SERVER_PORT: int = Field(default=8000, env="CHROMA_SERVER_PORT")
-    CHROMA_USE_REMOTE: bool = Field(default=True, env="CHROMA_USE_REMOTE")
+    # Milvus
+    MILVUS_HOST: str = Field(default="localhost", env="MILVUS_HOST")
+    MILVUS_PORT: int = Field(default=19530, env="MILVUS_PORT")
+    MILVUS_TOKEN: str = Field(default="", env="MILVUS_TOKEN")
+    MILVUS_DB_NAME: str = Field(default="default", env="MILVUS_DB_NAME")
 
     # Query DB Pool
     QUERY_POOL_SIZE: int = Field(default=10, env="QUERY_POOL_SIZE")

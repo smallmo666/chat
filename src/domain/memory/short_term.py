@@ -1,9 +1,6 @@
 import os
-from dotenv import load_dotenv
 import threading
-
-# 加载环境变量
-load_dotenv()
+from src.core.config import settings
 
 # 禁用 Mem0 遥测 (PostHog)，防止退出时报错
 os.environ["MEM0_TELEMETRY"] = "False"
@@ -12,58 +9,44 @@ from mem0 import Memory
 
 class LongTermMemory:
     """
-    长期记忆管理类，使用 Mem0 + ChromaDB。
+    长期记忆管理类，使用 Mem0 + Milvus。
     """
     def __init__(self):
-        # 优先使用本地持久化路径，与项目其他组件保持一致
-        chroma_path = "./chroma_db"
-        chroma_host = os.getenv("CHROMA_HOST")
-        chroma_port = int(os.getenv("CHROMA_PORT", 8000))
         
         # 基础配置
         config = {
             "llm": {
                 "provider": "openai",
                 "config": {
-                    "model": os.getenv("MODEL_NAME", "gpt-4o"), # 优先使用环境变量
+                    "model": settings.OPENAI_MODEL_NAME,
                     "temperature": 0,
-                    "openai_base_url": os.getenv("OPENAI_API_BASE"),
-                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "openai_base_url": settings.OPENAI_API_BASE,
+                    "api_key": settings.OPENAI_API_KEY,
                 }
             },
             # 使用 OpenAI 兼容的 Embedding
             "embedder": {
                 "provider": "openai",
                 "config": {
-                    "model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
-                    "openai_base_url": os.getenv("OPENAI_API_BASE"),
-                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "model": settings.EMBEDDING_MODEL,
+                    "openai_base_url": settings.OPENAI_API_BASE,
+                    "api_key": settings.OPENAI_API_KEY,
+                }
+            },
+            # Vector Store 配置 (Milvus)
+            "vector_store": {
+                "provider": "milvus",
+                "config": {
+                    "collection_name": "text2sql_memory",
+                    "embedding_model_dims": settings.EMBEDDING_DIM,
+                    "url": f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}",
+                    "token": settings.MILVUS_TOKEN,
+                    "db_name": settings.MILVUS_DB_NAME,
                 }
             }
         }
 
-        # Vector Store 配置：优先本地，其次 Host/Port
-        if not chroma_host:
-             # 使用本地持久化客户端
-             config["vector_store"] = {
-                "provider": "chroma",
-                "config": {
-                    "collection_name": "text2sql_memory",
-                    "path": chroma_path,
-                }
-            }
-             print(f"LongTermMemory: Using local ChromaDB at {chroma_path}")
-        else:
-            # 使用 HTTP 客户端
-            config["vector_store"] = {
-                "provider": "chroma",
-                "config": {
-                    "collection_name": "text2sql_memory",
-                    "host": chroma_host,
-                    "port": chroma_port,
-                }
-            }
-            print(f"LongTermMemory: Using remote ChromaDB at {chroma_host}:{chroma_port}")
+        print(f"LongTermMemory: Connecting to Milvus at {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
         
         try:
             self.memory = Memory.from_config(config)

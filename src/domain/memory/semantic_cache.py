@@ -1,103 +1,132 @@
-import os
 import hashlib
 import threading
 from typing import Optional, List
-from sentence_transformers import SentenceTransformer
-import chromadb
-
+from openai import OpenAI
+from pymilvus import MilvusClient, DataType
 from src.core.config import settings
 
 class SemanticCache:
     """
     基于向量相似度的语义缓存。
-    使用 ChromaDB 存储 (Question Vector, SQL)。
+    使用 Milvus 存储 (Question Vector, SQL)。
     """
     
     def __init__(self, project_id: int = None):
         self.project_id = project_id or "default"
+        self.enabled = settings.ENABLE_SEMANTIC_CACHE
+        self.client = None
+        self.collection_name = f"sql_cache_project_{self.project_id}"
+        self.openai_client = None
         
-        # 初始化 ChromaDB 客户端
+        if not self.enabled:
+            print("Info: Semantic Cache is disabled.")
+            return
+
+        # 初始化 OpenAI 客户端 (用于 Embedding)
         try:
-            if settings.CHROMA_USE_REMOTE:
-                try:
-                    print(f"Connecting to remote ChromaDB at {settings.CHROMA_SERVER_HOST}:{settings.CHROMA_SERVER_PORT}...")
-                    self.client = chromadb.HttpClient(
-                        host=settings.CHROMA_SERVER_HOST,
-                        port=settings.CHROMA_SERVER_PORT
-                    )
-                    self.client.heartbeat()
-                    print("Successfully connected to remote ChromaDB.")
-                except Exception as e:
-                    print(f"Warning: Failed to connect to remote ChromaDB ({e}), falling back to EphemeralClient.")
-                    self.client = chromadb.EphemeralClient()
-            else:
-                try:
-                    self.client = chromadb.PersistentClient(path="./chroma_db")
-                except Exception as e:
-                    print(f"Warning: PersistentClient failed ({e}), falling back to EphemeralClient (In-Memory).")
-                    self.client = chromadb.EphemeralClient()
-                
-            # 每个 Project 一个 Collection
-            collection_name = f"sql_cache_project_{self.project_id}"
-            self.collection = self.client.get_or_create_collection(name=collection_name)
+            self.openai_client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                base_url=settings.OPENAI_API_BASE
+            )
         except Exception as e:
-            print(f"Warning: Failed to initialize ChromaDB: {e}")
-            self.client = None
-            self.collection = None
-        
-        # 加载 Embedding 模型 (第一次运行会下载，建议生产环境预下载或使用 API)
-        # 使用轻量级模型以保证速度
-        # 设置 HF 镜像以解决国内下载问题
-        # 默认禁用 Semantic Cache 以避免网络问题阻塞启动
-        if os.getenv("ENABLE_SEMANTIC_CACHE", "false").lower() == "true":
-            if "HF_ENDPOINT" not in os.environ:
-                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            print(f"Warning: Failed to initialize OpenAI client for SemanticCache: {e}")
+            self.enabled = False
+            return
+
+        # 初始化 Milvus 客户端
+        try:
+            uri = f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}"
+            print(f"Connecting to Milvus at {uri}...")
+            self.client = MilvusClient(
+                uri=uri,
+                token=settings.MILVUS_TOKEN,
+                db_name=settings.MILVUS_DB_NAME
+            )
+            
+            # 检查并创建集合
+            if not self.client.has_collection(self.collection_name):
+                print(f"Creating Milvus collection: {self.collection_name}")
+                # 定义 Schema
+                schema = MilvusClient.create_schema(
+                    auto_id=False,
+                    enable_dynamic_field=True,
+                )
+                # 使用 MD5(query) 作为 ID
+                schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=128, is_primary=True)
+                schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=settings.EMBEDDING_DIM)
+                schema.add_field(field_name="sql", datatype=DataType.VARCHAR, max_length=65535)
+                schema.add_field(field_name="query", datatype=DataType.VARCHAR, max_length=65535)
                 
-            try:
-                self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
-            except Exception as e:
-                print(f"Warning: Failed to load SentenceTransformer: {e}")
-                self.encoder = None
-        else:
-            print("Info: Semantic Cache is disabled (ENABLE_SEMANTIC_CACHE!=true).")
-            self.encoder = None
+                # 索引参数
+                index_params = self.client.prepare_index_params()
+                index_params.add_index(
+                    field_name="vector",
+                    index_type="AUTOINDEX",
+                    metric_type="COSINE" 
+                )
+                
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    schema=schema,
+                    index_params=index_params
+                )
+                print(f"Milvus collection {self.collection_name} created successfully.")
+            
+            self.client.load_collection(self.collection_name)
+            print("SemanticCache initialized successfully.")
+            
+        except Exception as e:
+            print(f"Warning: Failed to initialize Milvus for SemanticCache: {e}")
+            self.enabled = False
+            self.client = None
         
     def _embed(self, text: str) -> List[float]:
-        if not self.encoder:
+        if not self.openai_client:
             return []
-        return self.encoder.encode(text).tolist()
+        try:
+            resp = self.openai_client.embeddings.create(
+                input=[text],
+                model=settings.EMBEDDING_MODEL
+            )
+            return resp.data[0].embedding
+        except Exception as e:
+            print(f"Error generating embedding: {e}")
+            return []
 
     def check(self, query: str, threshold: float = 0.9) -> Optional[str]:
         """
         检查缓存。如果存在相似度 > threshold 的查询，返回对应的 SQL。
         """
-        if not self.collection or not self.encoder:
+        if not self.enabled or not self.client:
             return None
 
         query_embedding = self._embed(query)
-        
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=1,
-            include=["metadatas", "distances"]
-        )
-        
-        if not results["ids"][0]:
+        if not query_embedding:
             return None
+        
+        try:
+            results = self.client.search(
+                collection_name=self.collection_name,
+                data=[query_embedding],
+                limit=1,
+                output_fields=["sql", "query"],
+                search_params={"metric_type": "COSINE"}
+            )
             
-        # Cosine Distance: 0 = identical, 1 = opposite (roughly)
-        # Chroma returns distance. For cosine, similarity = 1 - distance (if normalized)
-        # Default metric is L2 usually, let's assume we can calibrate.
-        # Actually for 'all-MiniLM-L6-v2' and default chroma (L2), lower is better.
-        # Let's verify similarity.
-        
-        distance = results["distances"][0][0]
-        
-        # Empirical threshold for L2 with normalized vectors (MiniLM produces normalized)
-        # 0.2 distance is roughly 0.8 similarity
-        if distance < (1 - threshold): 
-            sql = results["metadatas"][0][0].get("sql")
-            return sql
+            if not results or not results[0]:
+                return None
+                
+            match = results[0][0]
+            distance = match['distance'] # COSINE similarity
+            
+            # Milvus COSINE: range [-1, 1], larger is better
+            if distance >= threshold:
+                sql = match['entity'].get('sql')
+                print(f"Semantic Cache Hit! Similarity: {distance:.4f}")
+                return sql
+                
+        except Exception as e:
+            print(f"Error checking semantic cache: {e}")
             
         return None
 
@@ -105,44 +134,66 @@ class SemanticCache:
         """
         添加缓存条目。
         """
-        if not self.collection or not self.encoder:
+        if not self.enabled or not self.client:
             return
 
-        # 生成 ID
-        id = hashlib.md5(query.encode()).hexdigest()
-        
-        self.collection.upsert(
-            ids=[id],
-            embeddings=[self._embed(query)],
-            metadatas=[{"sql": sql, "query": query}]
-        )
+        try:
+            query_embedding = self._embed(query)
+            if not query_embedding:
+                return
+
+            id = hashlib.md5(query.encode()).hexdigest()
+            
+            data = [{
+                "id": id,
+                "vector": query_embedding,
+                "sql": sql,
+                "query": query
+            }]
+            
+            self.client.upsert(
+                collection_name=self.collection_name,
+                data=data
+            )
+        except Exception as e:
+            print(f"Error adding to semantic cache: {e}")
 
     def delete(self, query: str, threshold: float = 0.95):
         """
         删除与 query 相似的缓存条目（用于负反馈处理）。
         """
-        if not self.collection or not self.encoder:
+        if not self.enabled or not self.client:
             return
 
-        query_embedding = self._embed(query)
-        
-        # 查找非常相似的记录 (High threshold)
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=1,
-            include=["metadatas", "distances", "ids"]
-        )
-        
-        if not results["ids"][0]:
-            return
+        try:
+            query_embedding = self._embed(query)
+            if not query_embedding:
+                return
             
-        distance = results["distances"][0][0]
-        
-        # 只有确实很像才删，防止误删
-        if distance < (1 - threshold):
-            target_id = results["ids"][0][0]
-            print(f"DEBUG: Removing semantic cache entry {target_id} due to negative feedback. Distance: {distance}")
-            self.collection.delete(ids=[target_id])
+            # 查找非常相似的记录
+            results = self.client.search(
+                collection_name=self.collection_name,
+                data=[query_embedding],
+                limit=1,
+                output_fields=["id"],
+                search_params={"metric_type": "COSINE"}
+            )
+            
+            if not results or not results[0]:
+                return
+                
+            match = results[0][0]
+            distance = match['distance']
+            
+            if distance >= threshold:
+                target_id = match['id']
+                print(f"Removing semantic cache entry {target_id} due to negative feedback. Similarity: {distance}")
+                self.client.delete(
+                    collection_name=self.collection_name,
+                    ids=[target_id]
+                )
+        except Exception as e:
+            print(f"Error deleting from semantic cache: {e}")
 
 # Factory/Singleton
 _cache_instances = {}
