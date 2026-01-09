@@ -85,6 +85,7 @@ async def event_generator(
                     "messages": [HumanMessage(content=message)],
                     "manual_selected_tables": selected_tables,
                     # Clear previous turn's context to prevent state pollution
+                    "fresh_start": True,
                     "rewritten_query": None,
                     "plan": None,
                     "current_step_index": 0,
@@ -101,6 +102,13 @@ async def event_generator(
                     "ui_component": None,
                     "hypotheses": None,
                     "knowledge_context": None,
+                    
+                    # Explicitly clear clarification state to prevent leakage from previous turns
+                    "clarify_answer": None,
+                    "clarify_payload": None,
+                    "clarify_pending": False,
+                    "clarify_retry_count": 0,
+                    
                     "next": "START" # Reset next step
                 }
             elif command == "edit":
@@ -132,7 +140,16 @@ async def event_generator(
                     await queue.put({"type": "error", "content": "会话已过期或状态丢失，请刷新页面重新开始。"})
                     return
                 prev_msgs = snapshot.values.get("messages", [])
-                new_msgs = prev_msgs + ([HumanMessage(content=message)] if message else [])
+                
+                # Construct message from choices if present
+                if clarify_choices:
+                    choice_msg = f"我选择了: {', '.join(clarify_choices)}"
+                    # If message is also provided (unlikely for pure select), append it
+                    full_content = f"{choice_msg}\n{message}" if message else choice_msg
+                    new_msgs = prev_msgs + [HumanMessage(content=full_content)]
+                else:
+                    new_msgs = prev_msgs + ([HumanMessage(content=message)] if message else [])
+                
                 retry = int(snapshot.values.get("clarify_retry_count", 0) or 0) + 1
                 
                 update_payload = {
@@ -187,7 +204,61 @@ async def event_generator(
                 step_start_time = step_end_time
                 
                 for node_name, state_update in output.items():
-                    if node_name == "Supervisor": continue
+                    if node_name == "Supervisor":
+                        # Fetch latest snapshot for fallback context
+                        try:
+                            snapshot = await graph_app.aget_state(config)
+                        except Exception:
+                            snapshot = None
+                        clarify_payload = state_update.get("clarify")
+                        clarify_pending = state_update.get("clarify_pending", False)
+                        intent_clear = state_update.get("intent_clear")
+                        if clarify_pending or (clarify_payload and intent_clear is False):
+                            try:
+                                payload = clarify_payload
+                                if not payload:
+                                    # Fallback construct minimal clarification payload
+                                    opts = []
+                                    try:
+                                        sel = state_update.get("selected_tables") or (snapshot.values.get("selected_tables") if snapshot else []) or []
+                                        if sel: opts = sel
+                                    except Exception:
+                                        pass
+                                    if not opts:
+                                        allowed = (snapshot.values.get("allowed_schema") if snapshot else {}) or {}
+                                        if isinstance(allowed, dict) and allowed:
+                                            opts = list(allowed.keys())[:20]
+                                    if not opts:
+                                        try:
+                                            import json as _json
+                                            dsl_str = snapshot.values.get("dsl") if snapshot else None
+                                            if dsl_str:
+                                                dsl = _json.loads(dsl_str)
+                                                frm = dsl.get("from")
+                                                if isinstance(frm, str):
+                                                    opts = [frm]
+                                                elif isinstance(frm, list):
+                                                    opts = frm
+                                        except Exception:
+                                            pass
+                                    payload = {
+                                        "status": "AMBIGUOUS",
+                                        "question": "请选择用于执行的表",
+                                        "options": opts,
+                                        "type": "select"
+                                    }
+                                await queue.put({"type": "clarification", "content": payload})
+                            except Exception:
+                                pass
+                        # Still emit a step event for supervisor halt for observability
+                        await queue.put({
+                            "type": "step",
+                            "node": "Supervisor",
+                            "status": "completed",
+                            "details": "clarify_pending" if clarify_pending else "",
+                            "duration": 0
+                        })
+                        continue
                         
                     event_data = {
                         "type": "step",
@@ -226,6 +297,7 @@ async def event_generator(
 
                     elif node_name == "Planner":
                         plan = state_update.get("plan", [])
+                        print(f"DEBUG: Emitting plan event with {len(plan)} steps")
                         await queue.put({"type": "plan", "content": plan})
                         event_data["details"] = f"已生成 {len(plan)} 步执行计划"
                         audit_data["plan"] = plan
@@ -281,6 +353,24 @@ async def event_generator(
                         event_data["details"] = sql
                         audit_data["executed_sql"] = sql
                         
+                        # Handle DSLtoSQL clarification (schema errors)
+                        clarify_payload = state_update.get("clarify")
+                        if clarify_payload and state_update.get("intent_clear") is False:
+                            audit_data["status"] = "clarification_needed"
+                            # Emit clarification event so frontend can render options
+                            await queue.put({"type": "clarification", "content": clarify_payload})
+                        
+                    elif node_name == "SchemaGuard":
+                        if state_update.get("intent_clear") is False:
+                            cp = state_update.get("clarify")
+                            if cp:
+                                await queue.put({"type": "clarification", "content": cp})
+                            event_data["details"] = "Schema 预检需要澄清"
+                        else:
+                            allowed = state_update.get("allowed_schema", {})
+                            event_data["details"] = "Schema 预检通过"
+                            if allowed:
+                                await queue.put({"type": "substep", "node": "SchemaGuard", "title": "Allowed Schema", "detail": allowed})
                         
                     elif node_name == "ExecuteSQL":
                         results_json_str = state_update.get("results", "[]")
@@ -360,15 +450,47 @@ async def event_generator(
 
                     await queue.put(event_data)
             
-            # Check for Interrupts
+            # Check for Interrupts and Clarifications (Snapshot-based)
             snapshot = await graph_app.aget_state(config)
             if snapshot.next and "ExecuteSQL" in snapshot.next:
-                # We are paused before ExecuteSQL
                 current_sql = snapshot.values.get("sql", "")
                 await queue.put({"type": "interrupt", "content": current_sql})
-                # Do not save audit log yet, as we are not done (or save as 'pending')
-                # For simplicity, we skip saving here and wait for approval flow
                 return 
+            # If supervisor halted for clarification but no node emitted an event, send fallback clarification
+            try:
+                if snapshot.values.get("clarify_pending"):
+                    payload = snapshot.values.get("clarify")
+                    if not payload:
+                        opts = []
+                        sel = snapshot.values.get("selected_tables") or []
+                        if sel:
+                            opts = sel
+                        if not opts:
+                            allowed = snapshot.values.get("allowed_schema") or {}
+                            if isinstance(allowed, dict) and allowed:
+                                opts = list(allowed.keys())[:20]
+                        if not opts:
+                            import json as _json
+                            dsl_str = snapshot.values.get("dsl")
+                            if dsl_str:
+                                try:
+                                    dsl = _json.loads(dsl_str)
+                                    frm = dsl.get("from")
+                                    if isinstance(frm, str):
+                                        opts = [frm]
+                                    elif isinstance(frm, list):
+                                        opts = frm
+                                except Exception:
+                                    pass
+                        payload = {
+                            "status": "AMBIGUOUS",
+                            "question": "请选择用于执行的表",
+                            "options": opts,
+                            "type": "select"
+                        }
+                    await queue.put({"type": "clarification", "content": payload})
+            except Exception:
+                pass
 
             # Save Audit Log (Success)
             try:

@@ -16,6 +16,9 @@ BASE_SYSTEM_PROMPT = """
 数据库 Schema:
 {schema_info}
 
+允许使用的约束 (来自 SchemaGuard):
+{allowed_schema_hints}
+
 DSL 规范 (JSON):
 {{
   "command": "SELECT",
@@ -70,17 +73,35 @@ DSL 示例:
 {error_context}
 
 规则:
-1. 仅返回有效的 JSON 字符串。不要包含 Markdown。
-2. 严格遵循 DSL 规范，不要编造字段；只能使用【relevant_schema】中呈现的表与列。
-3. 如果用户查询包含与 [实体链接建议] 匹配的值，你必须使用建议中的精确值。
-4. "joins" 数组用于多表查询。如果只涉及单表，忽略此字段。
-5. "columns" 如果为空或未指定，默认为 SELECT * (但尽量明确列出)。
-6. 优先参考 [业务术语定义] 来构建 WHERE 条件或选择字段。
-7. JOIN 的 on 条件必须使用真实存在的列。你可以根据候选关联键（列名相似、*_id 命名、类型匹配）选择 ON；避免编造不存在的字段。一旦不确定，请减少 JOIN 并返回单表查询或请求澄清。
-8. 若定义了列别名 (alias)，请在 order_by/group_by 等引用时优先使用该 alias。
-9. 仅返回单个顶层 JSON 对象；如果需要多查询，请选择对用户问题最关键的单查询输出。严禁输出多个并列的 JSON 对象或数组。
-10. 在涉及日期范围与按月统计时，优先使用：date_trunc('month', 列名) 及 current_date - interval 'N months' 等 PostgreSQL 语法。
+1. 在输出 JSON 之前，必须先进行思考 (Chain-of-Thought)。请在 `<thinking>...</thinking>` 标签中详细描述你的推理过程。
+   - 分析用户的意图是什么。
+   - 确定需要查询哪些表。
+   - 确定表之间的连接条件 (JOIN ON)。
+   - 确定筛选条件 (WHERE) 和 聚合逻辑。
+   - 检查是否有 Schema 中不存在的列或表。
+2. 思考结束后，输出 ```json ... ``` 代码块。
+3. 严格遵循 DSL 规范，不要编造字段；只能使用【relevant_schema】中呈现的表与列。
+4. 如果用户查询包含与 [实体链接建议] 匹配的值，你必须使用建议中的精确值。
+5. "joins" 数组用于多表查询。如果只涉及单表，忽略此字段。
+6. "columns" 如果为空或未指定，默认为 SELECT * (但尽量明确列出)。
+7. 优先参考 [业务术语定义] 来构建 WHERE 条件或选择字段。
+8. JOIN 的 on 条件必须使用真实存在的列。你可以根据候选关联键（列名相似、*_id 命名、类型匹配）选择 ON；避免编造不存在的字段。一旦不确定，请减少 JOIN 并返回单表查询或请求澄清。
+9. 若定义了列别名 (alias)，请在 order_by/group_by 等引用时优先使用该 alias。
+10. 仅返回单个顶层 JSON 对象；如果需要多查询，请选择对用户问题最关键的单查询输出。严禁输出多个并列的 JSON 对象或数组。
+11. 在涉及日期范围与按月统计时，优先使用：date_trunc('month', 列名) 及 current_date - interval 'N months' 等 PostgreSQL 语法。
+
+输出格式示例:
+<thinking>
+用户想查询...
+涉及表 A 和 B...
+连接条件是...
+</thinking>
+```json
+{{ ... }}
+```
 """
+
+from src.core.event_bus import EventBus
 
 async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering generate_dsl_node (Async)")
@@ -90,6 +111,13 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         project_id = config.get("configurable", {}).get("project_id") if config else None
         llm = get_llm(node_name="GenerateDSL", project_id=project_id)
         
+        # Emit Initial Status
+        await EventBus.emit_substep(
+            node="GenerateDSL",
+            step="准备中",
+            detail="正在收集上下文信息 (Few-shot, 术语表, 实体值)..."
+        )
+
         messages = state["messages"]
         if len(messages) > 10:
             messages = messages[-10:]
@@ -176,6 +204,13 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         rag_examples = results[1]
         glossary_hints = results[2]
         
+        if value_hints:
+            await EventBus.emit_substep(node="GenerateDSL", step="实体链接", detail="已找到相关数据库值映射")
+        if rag_examples:
+            await EventBus.emit_substep(node="GenerateDSL", step="样本召回", detail="已加载相关 Few-shot 案例")
+        if glossary_hints:
+            await EventBus.emit_substep(node="GenerateDSL", step="术语召回", detail="已加载相关业务定义")
+
         if schema_task:
             full_schema_json = results[3]
             if full_schema_json:
@@ -198,6 +233,7 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
         if error:
             print(f"DEBUG: GenerateDSL - Injecting error context: {error}")
             error_context = f"\n\n!!! 严重警告 !!!\n上一次生成的 DSL 导致了 SQL 错误:\n{error}\n请根据错误修复 DSL (检查表名/列名)。"
+            await EventBus.emit_substep(node="GenerateDSL", step="错误重试", detail="正在基于报错信息调整生成策略")
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", BASE_SYSTEM_PROMPT),
@@ -208,23 +244,51 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
             value_hints=value_hints,
             glossary_hints=glossary_hints,
             rewritten_query_context=rewritten_query_context,
-            error_context=error_context
+            error_context=error_context,
+            allowed_schema_hints=""
         )
+        allowed_map = state.get("allowed_schema") or {}
+        if allowed_map:
+            parts = []
+            for t, cols in allowed_map.items():
+                cols_str = ", ".join(cols[:30])
+                parts.append(f"{t}: {cols_str}")
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", BASE_SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="history"),
+            ]).partial(
+                schema_info=schema_info, 
+                rag_examples=rag_examples, 
+                value_hints=value_hints,
+                glossary_hints=glossary_hints,
+                rewritten_query_context=rewritten_query_context,
+                error_context=error_context,
+                allowed_schema_hints="\n".join(parts)
+            )
         # 尝试结构化输出，失败则回退
         chain = prompt | llm
         
         print("DEBUG: Invoking LLM for DSL generation (Async)...")
+        await EventBus.emit_substep(node="GenerateDSL", step="推理中", detail="正在思考并生成 DSL 结构...")
+        
         result = await chain.ainvoke({"history": messages}, config=config)
 
         
-        dsl_str = result.content.strip()
-        print(f"DEBUG: DSL generated (len={len(dsl_str)})")
+        content = result.content.strip()
+        print(f"DEBUG: LLM Response (len={len(content)})")
         
-        # 清理 Markdown
-        if "```json" in dsl_str:
-            dsl_str = dsl_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in dsl_str:
-            dsl_str = dsl_str.split("```")[1].split("```")[0].strip()
+        # Extract Thinking Block (Optional log)
+        if "<thinking>" in content and "</thinking>" in content:
+            thinking = content.split("<thinking>")[1].split("</thinking>")[0]
+            print(f"DEBUG: DSL Thinking Process:\n{thinking}")
+            await EventBus.emit_substep(node="GenerateDSL", step="思考完成", detail=thinking[:100] + "...")
+
+        # Extract JSON
+        dsl_str = content
+        if "```json" in content:
+            dsl_str = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            dsl_str = content.split("```")[1].split("```")[0].strip()
             
         if not dsl_str:
              return {"dsl": '{"error": "Empty DSL generated"}'}
@@ -235,6 +299,7 @@ async def generate_dsl_node(state: AgentState, config: dict = None) -> dict:
                 "intent_clear": False
             }
 
+        await EventBus.emit_substep(node="GenerateDSL", step="生成完成", detail="DSL 协议已就绪")
         return {"dsl": dsl_str}
         
     except Exception as e:

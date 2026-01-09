@@ -1,19 +1,17 @@
-import React, { useState, useEffect, memo } from 'react';
+import React, { useState, memo } from 'react';
 import { 
     UserOutlined, 
     RobotOutlined, 
-    CopyOutlined, 
     LikeOutlined, 
     DislikeOutlined, 
     BarChartOutlined, 
     TableOutlined, 
-    PartitionOutlined, 
     SearchOutlined,
     CheckCircleOutlined,
     PlayCircleOutlined,
     DownloadOutlined
 } from '@ant-design/icons';
-import { Typography, Space, Button, Tooltip, Tag, theme, Modal, Checkbox } from 'antd';
+import { Typography, Space, Button, Tooltip, Tag, theme, Checkbox, message, Table } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -21,7 +19,6 @@ import remarkGfm from 'remark-gfm';
 import MessageContentCard from './MessageContentCard';
 import ThinkingAnimation from './ThinkingAnimation';
 import VisualizationPanel from './VisualizationPanel';
-import SqlReviewPanel from './SqlReviewPanel';
 import DataDownloadCard from './DataDownloadCard';
 import MessageAnimation from './MessageAnimation';
 import AccessibilityWrapper from '../common/AccessibilityWrapper';
@@ -34,8 +31,17 @@ interface MessageBubbleProps {
     item: Message;
     isLastMessage: boolean;
     isLoading: boolean;
-    onSendMessage: (msg: string, command?: string, params?: any) => void;
+    onSendMessage: (msg: string, command?: string, sql?: string, tables?: string[]) => void;
     isDarkMode?: boolean;
+    // Parent State Setters
+    setEditableSql?: (sql: string) => void;
+    setIsReviewOpen?: (open: boolean) => void;
+    setViewingPlan?: (plan: any) => void;
+    setIsPlanModalOpen?: (open: boolean) => void;
+    setEditablePythonCode?: (code: string) => void;
+    setPythonExecResult?: (result: any) => void;
+    setIsPythonEditOpen?: (open: boolean) => void;
+    latestData?: any[];
 }
 
 // 提取 Loading 组件以复用
@@ -70,20 +76,34 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
     isLastMessage, 
     isLoading, 
     onSendMessage,
-    isDarkMode = false
+    isDarkMode = false,
+    setEditableSql,
+    setIsReviewOpen,
+    setViewingPlan,
+    setIsPlanModalOpen,
+    setEditablePythonCode,
+    setPythonExecResult,
+    setIsPythonEditOpen,
+    latestData
 }) => {
     const { token } = useToken();
-    const [isReviewOpen, setIsReviewOpen] = useState(false);
-    const [editableSql, setEditableSql] = useState('');
+    // Removed local state that conflicts with parent props
     const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+    const [clarifySubmitted, setClarifySubmitted] = useState<boolean>(false);
 
-    const handleFeedback = (index: number, type: 'like' | 'dislike') => {
-        console.log(`Feedback ${type} for message ${index}`);
+    const [feedback, setFeedback] = useState<'like' | 'dislike' | null>(null);
+
+    const handleFeedback = (type: 'like' | 'dislike') => {
+        setFeedback(type);
+        // Call actual API here if available
+        console.log(`Feedback ${type} for session ${item.role}`);
     };
 
     const notify = (msg: string) => {
-        // Implement notification
-        console.log(msg);
+        message.success({
+            content: msg,
+            style: { marginTop: '10vh' }
+        });
     };
 
     const renderContent = (content: string, role: string) => {
@@ -128,36 +148,55 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
     const renderClarification = () => {
         if (!item.clarification) return null;
         
-        const { question, options, type, scope } = item.clarification;
+        const { question, options, type } = item.clarification;
         const isMultiple = type === 'multiple';
         
         return (
             <MessageContentCard
                 type="clarification"
-                title="需要澄清意图"
+                title="需要您的确认"
                 icon={<SearchOutlined />}
                 defaultExpanded={true}
-                style={{ borderColor: 'var(--primary-color)', background: 'var(--primary-bg-light)' }}
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <Typography.Text strong>{question}</Typography.Text>
+                    <Typography.Text style={{ fontSize: 14 }}>{question}</Typography.Text>
                     
                     {isMultiple ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <Checkbox.Group 
-                                options={options} 
+                                style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}
                                 value={selectedOptions} 
                                 onChange={(checkedValues) => setSelectedOptions(checkedValues as string[])}
-                            />
+                            >
+                                {options.map((opt, idx) => (
+                                    <Checkbox key={idx} value={opt} style={{ marginLeft: 0 }} disabled={clarifySubmitted}>
+                                        {opt}
+                                    </Checkbox>
+                                ))}
+                            </Checkbox.Group>
                             <Button 
                                 type="primary" 
-                                disabled={selectedOptions.length === 0}
+                                size="small"
+                                disabled={clarifySubmitted || selectedOptions.length === 0}
                                 onClick={() => {
-                                    // Submit multiple choices
-                                    onSendMessage("", "clarify", { clarify_choices: selectedOptions });
+                                    onSendMessage("", "clarify", undefined, selectedOptions);
+                                    setSelectedOptions([]);
+                                    setClarifySubmitted(true);
                                 }}
+                                style={{ width: 'fit-content' }}
                             >
                                 确认选择
+                            </Button>
+                            <Button 
+                                size="small"
+                                onClick={() => {
+                                    onSendMessage("", "clarify");
+                                    setClarifySubmitted(true);
+                                }}
+                                style={{ width: 'fit-content' }}
+                                disabled={clarifySubmitted}
+                            >
+                                跳过
                             </Button>
                         </div>
                     ) : (
@@ -166,14 +205,37 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                 <Button 
                                     key={idx} 
                                     size="small"
-                                    onClick={() => {
-                                        // Submit single choice
-                                        onSendMessage("", "clarify", { clarify_choices: [opt] });
+                                    type="default"
+                                    style={{ 
+                                        borderRadius: 16, 
+                                        fontSize: 13,
+                                        borderColor: token.colorPrimary,
+                                        color: token.colorPrimary
                                     }}
+                                    onClick={() => {
+                                        onSendMessage("", "clarify", undefined, [opt]);
+                                        setClarifySubmitted(true);
+                                    }}
+                                    disabled={clarifySubmitted}
                                 >
                                     {opt}
                                 </Button>
                             ))}
+                            <Button 
+                                size="small"
+                                type="default"
+                                onClick={() => {
+                                    onSendMessage("", "clarify");
+                                    setClarifySubmitted(true);
+                                }}
+                                style={{ 
+                                    borderRadius: 16, 
+                                    fontSize: 13
+                                }}
+                                disabled={clarifySubmitted}
+                            >
+                                跳过
+                            </Button>
                         </div>
                     )}
                 </div>
@@ -297,7 +359,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                         </div>
                                     )}
 
-                                    <ThinkingAnimation isVisible={isLoading && isLastMessage} />
+                                    <ThinkingAnimation isVisible={isLoading && isLastMessage} text={item.currentTask} />
                                 </div>
                             </MessageContentCard>
                         )}
@@ -309,11 +371,28 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                         {renderInsights()}
                         
                         {/* Visualization Options */}
-                        {item.vizOption && (
+                        {item.vizOption && !item.tableData && (
                             <VisualizationPanel 
                                 config={item.vizOption} 
                                 onUpdateConfig={(newConfig) => console.log(newConfig)} 
                             />
+                        )}
+                        {item.tableData && (
+                            <MessageContentCard
+                                type="insight"
+                                title="可视化（表格）"
+                                icon={<TableOutlined />}
+                                defaultExpanded={true}
+                            >
+                                <div style={{ width: '100%', overflowX: 'auto' }}>
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        dataSource={(item.tableData.data || []).map((row: any, idx: number) => ({ key: idx, ...row }))}
+                                        columns={(item.tableData.columns || []).map((k: string) => ({ title: k, dataIndex: k, key: k }))}
+                                    />
+                                </div>
+                            </MessageContentCard>
                         )}
                         
                         {/* UI Component */}
@@ -328,6 +407,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                             <DataDownloadCard token={item.downloadToken} />
                         )}
 
+                        {/* Data Preview (avoid duplicate when table visualization exists) */}
+                        {item.data && Array.isArray(item.data) && item.data.length > 0 && !item.tableData && (
+                            <MessageContentCard
+                                type="insight"
+                                title="结果预览"
+                                icon={<TableOutlined />}
+                                defaultExpanded={true}
+                            >
+                                <div style={{ width: '100%', overflowX: 'auto' }}>
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        dataSource={item.data.slice(0, 20).map((row: any, idx: number) => ({ key: idx, ...row }))}
+                                        columns={Object.keys(item.data[0] || {}).map((k: string) => ({ title: k, dataIndex: k, key: k }))}
+                                    />
+                                </div>
+                            </MessageContentCard>
+                        )}
+
                         {/* Result Content */}
                         {item.interrupt ? (
                             <MessageContentCard
@@ -340,8 +438,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                         size="small" 
                                         icon={<PlayCircleOutlined />}
                                         onClick={() => {
-                                            setEditableSql(item.content);
-                                            setIsReviewOpen(true);
+                                            if (setEditableSql) setEditableSql(item.content);
+                                            if (setIsReviewOpen) setIsReviewOpen(true);
                                         }}
                                         key="review"
                                     >
@@ -391,11 +489,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                         size="small" 
                                         icon={<LikeOutlined />} 
                                         style={{ 
-                                            color: 'var(--text-tertiary)', 
-                                            fontSize: 13
+                                            color: feedback === 'like' ? token.colorSuccess : 'var(--text-tertiary)', 
+                                            fontSize: 13,
+                                            background: feedback === 'like' ? 'rgba(82, 196, 26, 0.1)' : 'transparent'
                                         }}
                                         onClick={() => {
-                                            handleFeedback(0, 'like');
+                                            handleFeedback('like');
                                             notify("感谢您的点赞！系统已记录并学习。");
                                         }}
                                         data-icon="like"
@@ -408,11 +507,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                                         size="small" 
                                         icon={<DislikeOutlined />} 
                                         style={{ 
-                                            color: 'var(--text-tertiary)', 
-                                            fontSize: 13
+                                            color: feedback === 'dislike' ? token.colorError : 'var(--text-tertiary)', 
+                                            fontSize: 13,
+                                            background: feedback === 'dislike' ? 'rgba(255, 77, 79, 0.1)' : 'transparent'
                                         }}
                                         onClick={() => {
-                                            handleFeedback(0, 'dislike');
+                                            handleFeedback('dislike');
                                             notify("感谢反馈，我们会持续改进。");
                                         }}
                                         data-icon="dislike"
@@ -424,49 +524,34 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
 
                     {/* Next Step Suggestions (Only for last agent message) */}
                     {isLastMessage && item.role === 'agent' && !isLoading && (
-                        <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 4 }}>
-                            <Tag 
-                                icon={<BarChartOutlined />} 
-                                style={{ 
-                                    padding: '4px 12px', 
-                                    borderRadius: 16, 
-                                    cursor: 'pointer', 
-                                    border: '1px solid var(--primary-color)', 
-                                    color: 'var(--primary-color)', 
-                                    background: 'var(--primary-bg)'
-                                }}
-                                onClick={() => onSendMessage("请帮我可视化上述数据", "start")}
-                            >
-                                可视化数据
-                            </Tag>
-                            <Tag 
-                                icon={<TableOutlined />} 
-                                style={{ 
-                                    padding: '4px 12px', 
-                                    borderRadius: 16, 
-                                    cursor: 'pointer', 
-                                    border: '1px solid var(--primary-color)', 
-                                    color: 'var(--primary-color)', 
-                                    background: 'var(--primary-bg)' 
-                                }}
-                                onClick={() => onSendMessage("请分析数据中的异常点", "start")}
-                            >
-                                分析异常
-                            </Tag>
-                             <Tag 
-                                icon={<DownloadOutlined />} 
-                                style={{ 
-                                    padding: '4px 12px', 
-                                    borderRadius: 16, 
-                                    cursor: 'pointer', 
-                                    border: '1px solid var(--primary-color)', 
-                                    color: 'var(--primary-color)', 
-                                    background: 'var(--primary-bg)' 
-                                }}
-                                onClick={() => onSendMessage("请生成详细的数据报告", "start")}
-                            >
-                                生成报告
-                            </Tag>
+                        <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 10, paddingLeft: 4 }}>
+                            <span style={{ fontSize: 12, color: token.colorTextTertiary, width: '100%', marginBottom: 4 }}>建议操作:</span>
+                            {[
+                                { label: '可视化分析', icon: <BarChartOutlined />, msg: '请帮我可视化上述数据', type: 'viz' },
+                                { label: '异常检测', icon: <SearchOutlined />, msg: '请分析数据中的异常点', type: 'insight' },
+                                { label: '生成报表', icon: <DownloadOutlined />, msg: '请生成详细的数据报告', type: 'report' }
+                            ].map((suggest, idx) => (
+                                <Tag 
+                                    key={idx}
+                                    icon={suggest.icon} 
+                                    style={{ 
+                                        padding: '6px 16px', 
+                                        borderRadius: 20, 
+                                        cursor: 'pointer', 
+                                        border: `1px solid ${token.colorPrimary}`, 
+                                        color: token.colorPrimary, 
+                                        background: isDarkMode ? 'rgba(22, 119, 255, 0.1)' : '#fff',
+                                        fontSize: 13,
+                                        marginInlineEnd: 0,
+                                        boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                        transition: 'all 0.3s'
+                                    }}
+                                    className="suggestion-tag"
+                                    onClick={() => onSendMessage(suggest.msg, "start")}
+                                >
+                                    {suggest.label}
+                                </Tag>
+                            ))}
                         </div>
                     )}
                 </div>

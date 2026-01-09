@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Card, Typography, Select, Space, Button } from 'antd';
+import { Card, Space, Button } from 'antd';
 import { ReloadOutlined, DownloadOutlined } from '@ant-design/icons';
 import * as echarts from 'echarts';
 

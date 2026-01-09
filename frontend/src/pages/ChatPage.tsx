@@ -142,6 +142,13 @@ const ChatPageContent: React.FC = () => {
       }
   };
 
+  // Memoized Send Message Handler to prevent unnecessary re-renders of ChatWindow -> MessageBubble
+  const handleSendMessage = React.useCallback((msg: string, cmd?: string, sql?: string, tables?: string[]) => {
+      const isClarify = cmd === "clarify";
+      const selected = isClarify ? (tables || []) : (tables || checkedKeys);
+      sendMessage(msg, selected, cmd, sql);
+  }, [sendMessage, checkedKeys]);
+
   const renderLeftPanel = () => {
       const items = [
           {
@@ -248,7 +255,7 @@ const ChatPageContent: React.FC = () => {
                     <ChatWindow 
                         messages={messages}
                         isLoading={isLoading}
-                        onSendMessage={(msg, cmd, sql, tables) => sendMessage(msg, cmd === "clarify" ? [] : (tables || checkedKeys), cmd, sql)}
+                        onSendMessage={handleSendMessage}
                         latestData={latestData}
                         projectId={projectId}
                         projectName={projectName}
@@ -307,7 +314,7 @@ const ChatPageContent: React.FC = () => {
                     <ChatWindow 
                         messages={messages}
                         isLoading={isLoading}
-                        onSendMessage={(msg, cmd, sql) => sendMessage(msg, cmd === "clarify" ? [] : checkedKeys, cmd, sql)}
+                        onSendMessage={handleSendMessage}
                         latestData={latestData}
                         projectId={projectId}
                         projectName={projectName}

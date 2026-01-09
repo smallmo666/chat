@@ -23,6 +23,8 @@ class AgentState(TypedDict):
     relevant_schema: Optional[str]
     rewritten_query: Optional[str]
     manual_selected_tables: Optional[list[str]]
+    selected_tables: Optional[list[str]]
+    allowed_schema: Optional[dict]
     
     # Swarm / Detective Fields
     hypotheses: Optional[List[str]] # 侦探提出的假设列表

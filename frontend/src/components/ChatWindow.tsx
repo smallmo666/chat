@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button, Tooltip, App, Modal, Typography, Space, theme } from 'antd';
+import { Button, Tooltip, Modal, Typography, theme } from 'antd';
 import { 
     MenuUnfoldOutlined, MenuFoldOutlined, FileTextOutlined, 
     ExportOutlined, SyncOutlined, DownloadOutlined, PlayCircleOutlined,
-    LoadingOutlined, DownOutlined, ArrowDownOutlined
+    LoadingOutlined, ArrowDownOutlined
 } from '@ant-design/icons';
 import { useTheme } from '../context/ThemeContext';
 import { useSchema } from '../context/SchemaContext';
@@ -320,7 +320,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <MessageBubble 
                         key={index}
                         item={item}
-                        index={index}
                         isDarkMode={isDarkMode}
                         isLoading={isLoading}
                         isLastMessage={index === messages.length - 1}
@@ -329,7 +328,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                         setIsReviewOpen={setIsReviewOpen}
                         setViewingPlan={setViewingPlan}
                         setIsPlanModalOpen={setIsPlanModalOpen}
-                        handleFeedback={handleFeedback}
                         setEditablePythonCode={setEditablePythonCode}
                         setPythonExecResult={setPythonExecResult}
                         setIsPythonEditOpen={setIsPythonEditOpen}

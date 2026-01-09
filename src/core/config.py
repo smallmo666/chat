@@ -29,13 +29,21 @@ class Settings(BaseSettings):
     ENABLE_SEMANTIC_CACHE: bool = Field(default=False, env="ENABLE_SEMANTIC_CACHE")
 
     # CORS
-    CORS_ORIGINS: list[str] = Field(default=["*"], env="CORS_ORIGINS")
+    CORS_ORIGINS: list[str] = Field(
+        default=[
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174"
+        ],
+        env="CORS_ORIGINS"
+    )
 
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     REDIS_SCHEMA_TTL: int = Field(default=3600, env="REDIS_SCHEMA_TTL")
     REDIS_SQL_TTL: int = Field(default=300, env="REDIS_SQL_TTL")
-    REDIS_SOCKET_TIMEOUT: int = Field(default=30, env="REDIS_SOCKET_TIMEOUT")
+    REDIS_SOCKET_TIMEOUT: int = Field(default=60, env="REDIS_SOCKET_TIMEOUT")
     QUERY_CACHE_TTL: int = Field(default=600, env="QUERY_CACHE_TTL")
     
     # Milvus

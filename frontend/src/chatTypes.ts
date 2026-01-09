@@ -21,11 +21,13 @@ export interface Message {
     };
     actionLogs?: { node: string; step: string; detail?: string; metrics?: any; ts?: number }[];
     detectiveInsight?: { hypotheses: string[]; depth: string }; // 补充 detectiveInsight 字段
+    currentTask?: string; // 当前正在进行的任务描述
     
     // UI Helpers
     downloadToken?: string;
     isCode?: boolean;
     isAnalysis?: boolean;
+    tableData?: { columns: string[]; data: any[] };
 }
 
 export type TaskItem = {

@@ -14,6 +14,7 @@ from src.workflow.nodes.gen_dsl import generate_dsl_node
 from src.workflow.nodes.dsl2sql import dsl_to_sql_node
 from src.workflow.nodes.execute import execute_sql_node
 from src.workflow.nodes.select_tables import select_tables_node
+from src.workflow.nodes.schema_guard import schema_guard_node
 from src.workflow.nodes.visualization import visualization_node
 from src.workflow.nodes.table_qa import table_qa_node
 from src.workflow.nodes.python_analysis import python_analysis_node
@@ -75,6 +76,7 @@ def create_graph():
     
     workflow.add_node("ClarifyIntent", trace_node(clarify_intent_node, "ClarifyIntent"))
     workflow.add_node("SelectTables", trace_node(select_tables_node, "SelectTables"))
+    workflow.add_node("SchemaGuard", trace_node(schema_guard_node, "SchemaGuard"))
     workflow.add_node("GenerateDSL", trace_node(generate_dsl_node, "GenerateDSL"))
     workflow.add_node("DSLtoSQL", trace_node(dsl_to_sql_node, "DSLtoSQL"))
     workflow.add_node("ExecuteSQL", trace_node(execute_sql_node, "ExecuteSQL"))
@@ -124,6 +126,7 @@ def create_graph():
     # Worker -> Supervisor (控制权回归循环)
     workflow.add_edge("ClarifyIntent", "Supervisor")
     workflow.add_edge("SelectTables", "Supervisor")
+    workflow.add_edge("SchemaGuard", "Supervisor")
     workflow.add_edge("GenerateDSL", "Supervisor")
     workflow.add_edge("DSLtoSQL", "Supervisor")
     
@@ -166,8 +169,10 @@ def create_graph():
         "Supervisor",
         lambda x: x["next"],
         {
+            "Planner": "Planner",
             "ClarifyIntent": "ClarifyIntent",
             "SelectTables": "SelectTables",
+            "SchemaGuard": "SchemaGuard",
             "GenerateDSL": "GenerateDSL",
             "DSLtoSQL": "DSLtoSQL",
             "ExecuteSQL": "ExecuteSQL",

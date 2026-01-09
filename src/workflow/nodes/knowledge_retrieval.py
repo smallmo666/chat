@@ -1,16 +1,15 @@
 from typing import Any, Dict
 from src.workflow.state import AgentState
-from src.core.models import Knowledge
-from src.core.database import get_app_db
-from sqlmodel import select
+from src.domain.knowledge.retriever import get_knowledge_retriever
+from src.core.event_bus import EventBus
 
 async def knowledge_retrieval_node(state: AgentState, config: Dict = None) -> Dict[str, Any]:
     """
     Knowledge Retrieval Node
-    Retrieves relevant business knowledge (terms, formulas) based on user query.
-    Currently uses simple keyword matching (LIKE). Future: Vector Similarity Search.
+    Retrieves relevant business knowledge (terms, formulas) based on user query using Milvus Vector Search.
     """
     print("DEBUG: Entering Knowledge Retrieval Node")
+    project_id = config.get("configurable", {}).get("project_id") if config else None
     
     # 1. Get user query
     query = ""
@@ -22,35 +21,42 @@ async def knowledge_retrieval_node(state: AgentState, config: Dict = None) -> Di
     if not query:
         return {"knowledge_context": None}
 
-    # 2. Search Knowledge Base (Simple Keyword Match)
-    # TODO: Upgrade to Vector Search with ChromaDB
-    retrieved_knowledge = []
-    
+    # Emit Status
+    await EventBus.emit_substep(
+        node="KnowledgeRetrieval",
+        step="检索中",
+        detail=f"正在向量库中检索关于 '{query[:10]}...' 的知识"
+    )
+
+    # 2. Search Knowledge Base (Vector Search)
     try:
-        app_db = get_app_db()
-        with app_db.get_session() as session:
-            # Fetch all terms (optimization: fetch only relevant if possible)
-            # For MVP, we fetch all and match in python or use simple LIKE query if specific keywords found
-            # Let's try simple LIKE for each word in query (naive approach)
-            
-            # Better Naive Approach: Fetch all knowledge and check if term exists in query
-            all_knowledge = session.exec(select(Knowledge)).all()
-            
-            for k in all_knowledge:
-                if k.term.lower() in query.lower():
-                    retrieved_knowledge.append(f"- **{k.term}**: {k.definition}" + (f" (Formula: {k.formula})" if k.formula else ""))
-                    
+        retriever = get_knowledge_retriever(project_id)
+        knowledge_context = retriever.retrieve(query)
+        
+        if knowledge_context:
+            count = knowledge_context.count("- **")
+            await EventBus.emit_substep(
+                node="KnowledgeRetrieval",
+                step="检索完成",
+                detail=f"找到 {count} 条相关知识"
+            )
+            print(f"DEBUG: Retrieved {count} knowledge items.")
+            return {"knowledge_context": knowledge_context}
+        else:
+            await EventBus.emit_substep(
+                node="KnowledgeRetrieval",
+                step="检索完成",
+                detail="未找到相关知识"
+            )
+            print("DEBUG: No relevant knowledge found.")
+            return {"knowledge_context": None}
+
     except Exception as e:
         print(f"Knowledge Retrieval Failed: {e}")
-        # Fail gracefully
+        await EventBus.emit_substep(
+            node="KnowledgeRetrieval",
+            step="错误",
+            detail=f"检索失败: {str(e)}"
+        )
         return {"knowledge_context": None}
 
-    # 3. Format Context
-    if not retrieved_knowledge:
-        print("DEBUG: No relevant knowledge found.")
-        return {"knowledge_context": None}
-        
-    knowledge_context = "### Relevant Business Knowledge:\n" + "\n".join(retrieved_knowledge)
-    print(f"DEBUG: Retrieved {len(retrieved_knowledge)} knowledge items.")
-    
-    return {"knowledge_context": knowledge_context}

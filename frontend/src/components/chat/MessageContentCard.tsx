@@ -8,7 +8,7 @@ import {
 import { useState } from 'react';
 
 interface MessageContentCardProps {
-    type: 'code' | 'insight' | 'visualization' | 'download' | 'plan' | 'thinking';
+    type: 'code' | 'insight' | 'visualization' | 'download' | 'plan' | 'thinking' | 'clarification';
     title: string;
     icon?: React.ReactNode;
     children: React.ReactNode;
@@ -81,9 +81,14 @@ const MessageContentCard: React.FC<MessageContentCardProps> = ({
                 boxShadow: 'var(--shadow-sm)'
             },
             thinking: {
-                background: 'rgba(22, 119, 255, 0.05)',
+                background: 'rgba(22, 119, 119, 0.05)',
                 border: '1px dashed var(--primary-color)',
                 animation: 'pulse 2s infinite'
+            },
+            clarification: {
+                background: 'rgba(22, 119, 255, 0.05)',
+                border: '1px solid var(--primary-color)',
+                boxShadow: '0 2px 8px rgba(22, 119, 255, 0.1)'
             }
         };
 

@@ -114,8 +114,8 @@ class MySQLSaver(BaseCheckpointSaver):
             pickle.dumps(checkpoint),
             pickle.dumps(metadata)
         ))
-        if len(self._buffer) >= settings.CHECKPOINT_BATCH_SIZE:
-            self._flush_buffer()
+        # FORCE FLUSH: Immediate consistency required for read-after-write patterns
+        self._flush_buffer()
         
         return {
             "configurable": {

@@ -525,7 +525,14 @@ class QueryDatabase:
         except Exception as query_error:
             import traceback
             traceback.print_exc()
-            error_msg = f"执行查询时出错: {query_error}"
+            # Sanitize verbose SQLAlchemy background links and backticks
+            try:
+                em = str(query_error)
+                em = re.sub(r"\(Background on this error at: .*?\)", "", em)
+                em = em.replace("`", "")
+                error_msg = f"执行查询时出错: {em}".strip()
+            except Exception:
+                error_msg = f"执行查询时出错: {query_error}"
             print(f"DEBUG: QueryDatabase.run_query_async - Error: {error_msg}")
             return {
                 "markdown": error_msg,

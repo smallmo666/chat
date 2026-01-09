@@ -275,16 +275,16 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
                  for name in selected_names:
                      if name in candidate_map:
                          final_schema_dict[name] = candidate_map[name]
-                 return format_schema_str(final_schema_dict)
+                 return {"schema": format_schema_str(final_schema_dict), "selected": selected_names}
 
-            return final_schema_str
+            return {"schema": final_schema_str, "selected": selected_names}
 
             
         except Exception as e:
             print(f"DEBUG: LLM Selection failed: {e}")
             # Fallback to simple formatting of top candidates
             fallback_dict = {t['table_name']: t['full_info'] for t in candidates[:3]}
-            return format_schema_str(fallback_dict)
+            return {"schema": format_schema_str(fallback_dict), "selected": []}
 
     try:
         # 使用新的高级选择逻辑
@@ -304,7 +304,8 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
                 # 我们可能需要重置 plan 或者标记这一步为挂起，但 Supervisor 会处理 intent_clear=False
             }
             
-        schema_info = result_or_schema
+        schema_info = result_or_schema["schema"] if isinstance(result_or_schema, dict) else result_or_schema
+        selected_tables = result_or_schema["selected"] if isinstance(result_or_schema, dict) else []
     except Exception as e:
         print(f"DEBUG: Advanced table selection failed: {e}")
         import traceback
@@ -328,7 +329,35 @@ async def select_tables_node(state: AgentState, config: dict = None) -> dict:
     
     # if len(schema_info) > 3000: ... (Removed)
     
+    try:
+        import re as _re
+        tables = []
+        for line in schema_info.split("\n"):
+            if line.startswith("表名:"):
+                m = _re.match(r"表名:\s*([A-Za-z0-9_.]+)", line)
+                if m:
+                    tables.append(m.group(1))
+            elif line.startswith("Table:"):
+                m = _re.match(r"Table:\s*([A-Za-z0-9_.]+)", line)
+                if m:
+                    tables.append(m.group(1))
+        if not tables:
+            try:
+                selected_tables
+            except NameError:
+                selected_tables = []
+            if selected_tables:
+                tables = selected_tables
+        allowed = {t: [] for t in tables} if tables else {}
+    except Exception as _:
+        allowed = {}
+    
+    print(f"DEBUG: SelectTables - selected_tables: {selected_tables if 'selected_tables' in locals() else []}")
+    print(f"DEBUG: SelectTables - allowed_schema size: {len(allowed) if isinstance(allowed, dict) else 0}")
     return {
         "relevant_schema": schema_info,
-        "rewritten_query": search_query
+        "rewritten_query": search_query,
+        "selected_tables": selected_tables if 'selected_tables' in locals() else [],
+        "allowed_schema": allowed if allowed else None,
+        "intent_clear": True if allowed else None
     }

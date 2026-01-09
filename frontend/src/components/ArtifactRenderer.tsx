@@ -6,9 +6,7 @@ import {
     FullscreenOutlined, 
     FullscreenExitOutlined, 
     WarningOutlined,
-    BarChartOutlined,
-    CodeOutlined
-} from '@ant-design/icons';
+    BarChartOutlined} from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import * as Babel from '@babel/standalone';
 

@@ -37,6 +37,9 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
                 "snapshot_token": token,
                 "interrupt_pending": True
             }
+        if clarify_pending or (clarify_payload and not state.get("clarify_answer")):
+            print("DEBUG: Supervisor - Clarify pending detected globally. Halting for user selection.")
+            return {"next": "FINISH", "clarify_pending": True}
         if intent_clear is False:
             # Check if user has already provided an answer (this overrides intent_clear=False)
             if state.get("clarify_answer"):
@@ -118,6 +121,20 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
 
         plan = state.get("plan", [])
         current_index = state.get("current_step_index", 0)
+        
+        # --- Post-Clarification Routing ---
+        # 如果刚刚完成了澄清（有答案且意图清晰），且计划已结束或为空，说明之前的计划只是为了澄清。
+        # 现在需要重新规划真正的执行路径。
+        if state.get("clarify_answer") and intent_clear and (not plan or current_index >= len(plan)):
+            print("DEBUG: Supervisor - Clarification complete. Routing to Planner for re-planning.")
+            return {
+                "next": "Planner",
+                "current_step_index": 0, # 重置索引
+                "plan": [], # 清空旧计划，强制 Planner 生成新计划
+                # 关键：保留 clarify_answer，让 Planner 能看到用户的澄清选择，从而生成正确的计划
+                # Planner 会在生成计划后负责清理这个字段，或者通过 last_executed_node 判断
+                # "clarify_answer": None,  <-- 不要在这里清除！
+            }
         
         print(f"DEBUG: Supervisor - Plan len: {len(plan)}, Current Index: {current_index}")
 
@@ -233,6 +250,13 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
 
         # 如果没有计划或已完成所有步骤，则结束
         if not plan or current_index >= len(plan):
+            # Special case: If intent is clear but no plan exists (e.g. after clarification),
+            # we should start the flow, typically with SelectTables (or Planner).
+            # Assuming SelectTables is the first step of a standard flow.
+            if not plan and intent_clear:
+                 print("DEBUG: Supervisor - Intent clear but no plan. Routing to SelectTables.")
+                 return {"next": "SelectTables"}
+            
             print("DEBUG: Supervisor - Plan finished or empty -> FINISH")
             return {"next": "FINISH"}
         
@@ -240,6 +264,64 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
         next_node = plan[current_index]["node"]
         print(f"DEBUG: Supervisor - Next node: {next_node}")
         
+        # --- GenerateDSL 前置检查 ---
+        if next_node == "GenerateDSL" and not state.get("allowed_schema"):
+            print(f"DEBUG: Supervisor - Pre-GenerateDSL check: selected_tables={state.get('selected_tables')}, allowed_schema={state.get('allowed_schema')}")
+            sel = state.get("selected_tables") or []
+            if sel:
+                print(f"DEBUG: Supervisor - Building allowed_schema from selected_tables: {sel}")
+                return {
+                    "next": "GenerateDSL",
+                    "current_step_index": current_index + 1,
+                    "allowed_schema": {t: [] for t in sel}
+                }
+            # 如果上一步已经是 SchemaGuard，说明尝试获取 Schema 失败，不能死循环
+            if last_executed == "SchemaGuard":
+                print("DEBUG: Supervisor - SchemaGuard failed, attempting fallback allowed_schema.")
+                rel = state.get("relevant_schema", "") or ""
+                import re as _re
+                tables = []
+                for line in rel.split("\n"):
+                    if line.startswith("表名:"):
+                        m = _re.match(r"表名:\s*([A-Za-z0-9_.]+)", line)
+                        if m:
+                            tables.append(m.group(1))
+                if tables:
+                    print(f"DEBUG: Supervisor - Fallback allowed_schema using tables: {tables}")
+                    return {
+                        "next": "GenerateDSL",
+                        "current_step_index": current_index + 1,
+                        "allowed_schema": {t: [] for t in tables}
+                    }
+                print("DEBUG: Supervisor - SchemaGuard failed to produce allowed_schema. Halting to prevent loop.")
+                return {
+                     "next": "FINISH",
+                     "error": "无法确定查询涉及的数据表 (SchemaGuard Failed)。请尝试提供更详细的表名信息。"
+                }
+            # 如果上一步是 SelectTables 且它也失败了（没有 allowed_schema），通常 SelectTables 会处理 ambiguity。
+            # 但如果 SelectTables 认为意图清晰却没选出表（极少见），或者直接被跳过，我们需要防御。
+            
+            print("DEBUG: Supervisor - No allowed_schema before GenerateDSL, routing to SchemaGuard.")
+            # 关键：不要增加 current_step_index，这样 SchemaGuard 执行完后，Supervisor 会再次检查
+            # 由于 SchemaGuard 执行后 last_executed 变为 SchemaGuard，如果它成功产出 schema，
+            # 下次循环将进入 else 分支正常执行 GenerateDSL。
+            # 如果它失败，将触发上面的 Loop Prevention。
+            return {
+                "next": "SchemaGuard",
+                # current_step_index 保持不变，意味着 SchemaGuard 是“插入”的步骤
+                # 但我们需要小心，如果 SchemaGuard 不在 plan 里，我们需要它执行完后回到这里。
+                # 如果我们不增加 index，supervisor 下次还是看 index=3 (GenerateDSL)。
+                # 这样是对的。
+                "current_step_index": current_index 
+            }
+        # ExecuteSQL 前置保护：无 SQL 不进入执行链
+        if next_node == "ExecuteSQL" and not state.get("sql"):
+            print("DEBUG: Supervisor - No SQL present, preventing ExecuteSQL. Routing back to DSLtoSQL")
+            return {
+                "next": "DSLtoSQL",
+                "current_step_index": current_index  # 不推进索引，回到编译步骤
+            }
+
         return {
             "next": next_node,
             "current_step_index": current_index + 1

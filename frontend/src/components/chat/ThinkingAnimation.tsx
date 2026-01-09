@@ -5,20 +5,22 @@ const { useToken } = theme;
 
 interface ThinkingAnimationProps {
     isVisible: boolean;
+    text?: string;
 }
 
-const ThinkingAnimation: React.FC<ThinkingAnimationProps> = ({ isVisible }) => {
+const ThinkingAnimation: React.FC<ThinkingAnimationProps> = ({ isVisible, text }) => {
     const { token } = useToken();
     
     if (!isVisible) return null;
 
     return (
-        <div style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 8, verticalAlign: 'middle' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 8, verticalAlign: 'middle', gap: 8 }}>
             <div className="thinking-dots">
                 <span></span>
                 <span></span>
                 <span></span>
             </div>
+            {text && <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{text}</span>}
             <style>{`
                 .thinking-dots {
                     display: flex;

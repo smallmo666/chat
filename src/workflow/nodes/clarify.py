@@ -16,6 +16,13 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering clarify_intent_node (Async)")
     await EventBus.emit_substep("ClarifyIntent", "start", "开始分析用户意图")
 
+    # Defense in depth: Check if user has already answered clarification
+    # This prevents infinite loops if Supervisor routes back here by mistake
+    if state.get("clarify_answer"):
+        print("DEBUG: ClarifyIntent - User has already answered clarification. Skipping LLM.")
+        await EventBus.emit_substep("ClarifyIntent", "result", "收到用户澄清，继续执行")
+        return {"intent_clear": True, "last_executed_node": "ClarifyIntent"}
+
     if state.get("interrupt_pending"):
         return {"intent_clear": False, "last_executed_node": "ClarifyIntent"}
 

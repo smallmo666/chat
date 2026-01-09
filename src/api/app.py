@@ -1,6 +1,9 @@
 import os
 import warnings
 
+# Fix for OpenMP runtime conflict (OMP: Error #15)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # Configure Matplotlib cache directory to be local and writable
 # Must be set before importing matplotlib
 os.environ['MPLCONFIGDIR'] = os.path.join(os.getcwd(), '.matplotlib_cache')

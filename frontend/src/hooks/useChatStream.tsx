@@ -92,8 +92,9 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
         const selectedTables = checkedKeys.filter(k => typeof k === 'string' && !k.toString().includes('.'));
         lastRequestRef.current = { userMsg, checkedKeys, command, modifiedSql };
         
-        // Add User Message
-        setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+        if (command !== 'clarify' && userMsg && userMsg.trim().length > 0) {
+            setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+        }
         
         setIsLoading(true);
         setLatestData([]);
@@ -205,7 +206,8 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                             setTasks(newTasks);
                             updateLastAgentMessage(msg => ({
                                 ...msg,
-                                plan: newTasks
+                                plan: newTasks,
+                                currentTask: newTasks[0]?.title
                             }));
                         } else if (eventType === 'substep') {
                             const { node, step, detail, ts } = data;
@@ -234,8 +236,11 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                             updateLastAgentMessage(msg => {
                                 const newPlan = msg.plan ? [...msg.plan] : [];
                                 const taskIndex = newPlan.findIndex(t => t.id === node);
+                                let currentTaskTitle = msg.currentTask;
+
                                 if (taskIndex !== -1) {
                                     const currentTask = newPlan[taskIndex];
+                                    currentTaskTitle = `${currentTask.title}: ${step}`;
                                     const newSubtasks = [...(currentTask.subtasks || [])];
                                     newSubtasks.push({
                                         id: `${node}-${step}-${ts}`,
@@ -250,11 +255,24 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                 }
                                 const newLogs = [...(msg.actionLogs || [])];
                                 newLogs.push({ node, step, detail, ts });
-                                return { ...msg, plan: newPlan, actionLogs: newLogs };
+                                return { ...msg, plan: newPlan, actionLogs: newLogs, currentTask: currentTaskTitle };
                             });
 
                         } else if (eventType === 'step') {
-                            updateStepStatus(data.node, data.status, data.details, data.duration);
+                            const { node, status, details, duration } = data;
+                            updateStepStatus(node, status, details, duration);
+                            
+                            // Also update currentTask for the next step
+                            if (status === 'completed') {
+                                updateLastAgentMessage(msg => {
+                                    const nextIndex = (msg.plan?.findIndex(t => t.id === node) ?? -1) + 1;
+                                    const nextTask = msg.plan?.[nextIndex];
+                                    return {
+                                        ...msg,
+                                        currentTask: nextTask ? nextTask.title : undefined
+                                    };
+                                });
+                            }
                         } else if (eventType === 'interrupt') {
                             updateLastAgentMessage(msg => ({
                                 ...msg,
@@ -356,10 +374,15 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                             }));
                         } else if (eventType === 'visualization') {
                             const vizData = data.content;
-                             updateLastAgentMessage(msg => ({
-                                ...msg,
-                                vizOption: vizData.option || vizData
-                            }));
+                            updateLastAgentMessage(msg => {
+                                if (vizData && vizData.chart_type === 'echarts' && vizData.option) {
+                                    return { ...msg, vizOption: vizData.option, tableData: undefined };
+                                }
+                                if (vizData && vizData.chart_type === 'table' && vizData.table_data) {
+                                    return { ...msg, tableData: vizData.table_data, vizOption: undefined };
+                                }
+                                return { ...msg, vizOption: vizData.option || vizData };
+                            });
                             setIsLoading(false);
                         } else if (eventType === 'error') {
                              updateLastAgentMessage(msg => ({
@@ -394,6 +417,7 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
         messages,
         setMessages,
         isLoading,
+        setIsLoading,
         tasks,
         setTasks,
         sendMessage,
