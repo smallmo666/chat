@@ -504,15 +504,21 @@ async def event_generator(
                         session.add(chat_session)
                     
                     # Create audit log
+                    def _truncate(v, n):
+                        if v is None:
+                            return None
+                        if not isinstance(v, str):
+                            return v
+                        return v[:n]
                     log = AuditLog(
                         project_id=project_id,
                         user_id=user_id,
                         session_id=thread_id,
                         user_query=message,
                         plan={"steps": audit_data.get("plan", [])} if isinstance(audit_data.get("plan"), list) else audit_data.get("plan"),
-                        executed_sql=audit_data.get("executed_sql"),
-                        generated_dsl=audit_data.get("generated_dsl"),
-                        result_summary=audit_data.get("result_summary"),
+                        executed_sql=_truncate(audit_data.get("executed_sql"), 1000),
+                        generated_dsl=_truncate(audit_data.get("generated_dsl"), 2000),
+                        result_summary=_truncate(audit_data.get("result_summary"), 500),
                         duration_ms=total_duration,
                         status=audit_data.get("status", "success"),
                         error_message=None

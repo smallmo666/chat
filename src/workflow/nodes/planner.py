@@ -79,7 +79,7 @@ async def planner_node(state: AgentState, config: dict = None) -> dict:
     project_id = config.get("configurable", {}).get("project_id") if config else None
     llm = get_llm(node_name="Planner", project_id=project_id)
     
-    messages = state.get("messages", [])
+    messages = [m for m in state.get("messages", []) if getattr(m, "type", "") == "human"]
     hypotheses = state.get("hypotheses", [])
     
     # 截断历史记录以避免 Token 溢出

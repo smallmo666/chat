@@ -263,6 +263,19 @@ def supervisor_node(state: AgentState, config: dict = None) -> dict:
         # 获取下一步节点名称
         next_node = plan[current_index]["node"]
         print(f"DEBUG: Supervisor - Next node: {next_node}")
+        # 错误优先路由：存在错误时，不进入可视化，优先尝试修复，超过上限则结束
+        if state.get("error"):
+            retry = state.get("retry_count", 0)
+            if retry is None:
+                retry = 0
+            if retry < 3:
+                return {"next": "CorrectSQL", "current_step_index": current_index}
+            else:
+                print("DEBUG: Supervisor - Max retries reached with error, finishing.")
+                return {"next": "FINISH"}
+        if state.get("clarify_pending") or (state.get("intent_clear") is False):
+            print("DEBUG: Supervisor - Clarification pending or intent unclear. Halting to avoid loop.")
+            return {"next": "FINISH"}
         
         # --- GenerateDSL 前置检查 ---
         if next_node == "GenerateDSL" and not state.get("allowed_schema"):

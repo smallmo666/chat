@@ -8,8 +8,51 @@ from src.core.mapping import load_column_mapping, apply_mapping_to_ref
 from src.domain.schema.search import get_schema_searcher
 from langchain_core.messages import AIMessage
 from src.domain.schema.join_infer import infer_join_candidates
+from sqlglot import parse_one, exp
 
 from src.core.event_bus import EventBus
+
+def _quote_case_identifiers(sql_str: str) -> str:
+    try:
+        tree = parse_one(sql_str)
+        def walk(e):
+            if isinstance(e, exp.Column):
+                parts = e.parts
+                if parts:
+                    ident = parts[-1]
+                    if isinstance(ident, exp.Identifier):
+                        name = ident.this
+                        if name and name != name.lower():
+                            ident.set("quoted", True)
+            for v in e.args.values():
+                if isinstance(v, list):
+                    for c in v:
+                        if isinstance(c, exp.Expression):
+                            walk(c)
+                elif isinstance(v, exp.Expression):
+                    walk(v)
+        walk(tree)
+        out = tree.to_sql()
+        def repl(m):
+            left = m.group(1)
+            col = m.group(2)
+            if col != col.lower() and not (col.startswith('"') and col.endswith('"')):
+                return f"{left}.\"{col}\""
+            return m.group(0)
+        out = re.sub(r'(\b[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)\.([A-Za-z][A-Za-z0-9_]*)', repl, out)
+        out = re.sub(r'((?:"[A-Za-z][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[A-Za-z][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*))?)::interval\b', r"\1 * interval '1 day'", out)
+        return out
+    except Exception:
+        out = sql_str
+        def repl(m):
+            left = m.group(1)
+            col = m.group(2)
+            if col != col.lower() and not (col.startswith('"') and col.endswith('"')):
+                return f"{left}.\"{col}\""
+            return m.group(0)
+        out = re.sub(r'(\b[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)\.([A-Za-z][A-Za-z0-9_]*)', repl, out)
+        out = re.sub(r'((?:"[A-Za-z][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[A-Za-z][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*))?)::interval\b', r"\1 * interval '1 day'", out)
+        return out
 
 async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
     print("DEBUG: Entering dsl_to_sql_node (Async) - Using Code Compiler")
@@ -50,6 +93,14 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                 cleaned_dsl = cleaned_dsl.split("```json")[1].split("```")[0].strip()
             elif "```" in cleaned_dsl:
                 cleaned_dsl = cleaned_dsl.split("```")[1].split("```")[0].strip()
+            # 去除行内 // 注释与块注释 /* ... */，提高对 LLM 输出的容错
+            def _strip_comments(s: str) -> str:
+                # 去掉 // 注释
+                s = re.sub(r"//.*?$", "", s, flags=re.MULTILINE)
+                # 去掉 /* ... */ 注释
+                s = re.sub(r"/\*[\s\S]*?\*/", "", s, flags=re.MULTILINE)
+                return s
+            cleaned_dsl = _strip_comments(cleaned_dsl)
             
             # 尝试直接解析
             try:
@@ -86,12 +137,12 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                 candidates = extract_json_objects(cleaned_dsl)
                 if candidates:
                     try:
-                        dsl_json = json.loads(candidates[0])
+                        dsl_json = json.loads(_strip_comments(candidates[0]))
                     except Exception as _:
                         # 最后一搏：贪婪正则
                         match = re.search(r'(\{.*\})', cleaned_dsl, re.DOTALL)
                         if match:
-                            json_candidate = match.group(1)
+                            json_candidate = _strip_comments(match.group(1))
                             dsl_json = json.loads(json_candidate)
                         else:
                             raise ValueError("No JSON object found in output")
@@ -108,6 +159,34 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         # 3.0 应用列映射与默认 schema 前缀
         try:
             colmap = load_column_mapping()
+            # 规范化列定义：支持 expression 字段；支持仅 agg 的 COUNT(*) 规范化
+            def normalize_coldefs(col_defs: list[dict]) -> list[dict]:
+                out = []
+                for cd in col_defs or []:
+                    expr = cd.get("expression")
+                    if expr and not cd.get("name"):
+                        cd["name"] = expr
+                    # 处理仅有聚合函数的列，如 {"name":"count","agg":"COUNT"} -> COUNT(*)
+                    agg = cd.get("agg")
+                    name_lower = str(cd.get("name", "")).lower()
+                    if agg:
+                        agg_upper = str(agg).upper()
+                        if agg_upper == "COUNT":
+                            # 如果 name 已经是聚合表达式，移除 agg，避免双重包装
+                            if "count(" in name_lower or name_lower == "count(*)":
+                                cd["agg"] = None
+                            else:
+                                # 将 COUNT 聚合内联到 name，并移除 agg
+                                base = cd.get("name", "*")
+                                if base in ("*", ""):
+                                    cd["name"] = "COUNT(*)"
+                                else:
+                                    cd["name"] = f"COUNT({base})"
+                                cd["agg"] = None
+                        # 其他聚合类型保持原样
+                    out.append(cd)
+                return out
+            dsl_json["columns"] = normalize_coldefs(dsl_json.get("columns", []))
             def map_coldefs(col_defs: list[dict]) -> list[dict]:
                 out = []
                 for cd in col_defs or []:
@@ -184,6 +263,7 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
             searcher = get_schema_searcher(project_id)
             # 获取可用的 schema map：table -> set(columns)
             schema_map = {}
+            issues = []
             try:
                 full_schema = searcher._get_schema()
                 for t, info in full_schema.items():
@@ -194,7 +274,6 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
             
             if not schema_map:
                 await EventBus.emit_substep(node="DSLtoSQL", step="跳过校验", detail="元数据不可用，跳过静态校验")
-                issues = []
                 missing_tables = []
                 missing_columns = []
                 extra_missing = []
@@ -238,22 +317,39 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                     if alias:
                         aliases.add(alias)
                     if name:
-                        # 尝试解析函数表达式中的裸列名，简单处理
-                        # 例如 sum(amount) -> amount
                         base = name
                         m = re.match(r"(?i)\s*(?:sum|count|avg|min|max)\s*\(\s*([a-zA-Z0-9_\.]+)\s*\)\s*$", base or "")
                         if m:
                             base = m.group(1)
-                        # 拆分 table.column
-                        if "." in base and not tname:
-                            parts = base.split(".", 1)
-                            tname = parts[0]
-                            base = parts[1]
-                        if tname and not table_exists(tname):
-                            if tname not in missing_tables: # 避免重复
-                                 missing_tables.append(tname)
-                        elif base and base != "*" and not column_exists(tname, base):
-                            missing_columns.append(f"{tname+'.' if tname else ''}{base}")
+                            if "." in base and not tname:
+                                parts = base.split(".", 1)
+                                tname = parts[0]
+                                base = parts[1]
+                            if tname and not table_exists(tname):
+                                if tname not in missing_tables:
+                                     missing_tables.append(tname)
+                            elif base and base != "*" and not column_exists(tname, base):
+                                missing_columns.append(f"{tname+'.' if tname else ''}{base}")
+                        else:
+                            tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*", base or "")
+                            func_names = {"date_trunc","to_timestamp","cast","coalesce","extract","concat"}
+                            keywords = {"interval","current_date","current_timestamp","true","false","null"}
+                            for tok in tokens:
+                                tl = tok.lower()
+                                if tl in func_names or tl in keywords:
+                                    continue
+                                if re.match(r"^[0-9]+$", tok):
+                                    continue
+                                if "." in tok:
+                                    tn, cn = tok.split(".", 1)
+                                    if not table_exists(tn):
+                                        if tn not in missing_tables:
+                                            missing_tables.append(tn)
+                                    elif not column_exists(tn, cn):
+                                        missing_columns.append(f"{tn}.{cn}")
+                                else:
+                                    if tok != "*" and not column_exists(None, tok):
+                                        missing_columns.append(tok)
 
                 # 递归遍历 WHERE/HAVING 条件
                 def collect_condition_columns(cond):
@@ -280,27 +376,49 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                 group_cols = dsl_json.get("group_by") or []
                 order_cols = [o.get("column") for o in (dsl_json.get("order_by") or []) if isinstance(o, dict)]
                 
-                def verify_ref(colref: str):
-                    if not colref:
-                        return None
-                    if colref in aliases:
-                        return None
-                    # Check keywords or literals (basic check)
-                    if str(colref).upper() in ["TRUE", "FALSE", "NULL"]:
-                        return None
-                    
-                    if "." in colref:
-                        tn, cn = colref.split(".", 1)
-                        if not table_exists(tn):
-                            return f"表不存在: {tn}"
-                        if not column_exists(tn, cn):
-                            return f"列不存在: {tn}.{cn}"
-                    else:
-                        # 裸列必须至少存在于某个选中表
-                        found = any(column_exists(t, colref) for t in selected_tables)
-                        if not found:
-                            return f"列不存在: {colref}"
+            def verify_ref(colref: str):
+                if not colref:
                     return None
+                if colref in aliases:
+                    return None
+                s = str(colref)
+                if s.upper() in ["TRUE", "FALSE", "NULL"]:
+                    return None
+                # 如果是复杂表达式，提取其中的列引用进行逐项校验
+                if any(ch in s for ch in ("(", ")", " ", "-", "+", "*", "/", ":", "'", '"')):
+                    func_names = {"date_trunc","to_timestamp","cast","coalesce","extract","concat"}
+                    keywords = {"interval","current_date","current_timestamp"}
+                    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*", s)
+                    for tok in tokens:
+                        tl = tok.lower()
+                        if tl in func_names or tl in keywords:
+                            continue
+                        if re.match(r"^[0-9]+$", tok):
+                            continue
+                        if "." in tok:
+                            tn, cn = tok.split(".", 1)
+                            if not table_exists(tn):
+                                return f"表不存在: {tn}"
+                            if not column_exists(tn, cn):
+                                return f"列不存在: {tn}.{cn}"
+                        else:
+                            # 裸列必须存在于选中表之一
+                            found = any(column_exists(t, tok) for t in selected_tables)
+                            if not found:
+                                return f"列不存在: {tok}"
+                    return None
+                # 简单引用直接校验
+                if "." in s:
+                    tn, cn = s.split(".", 1)
+                    if not table_exists(tn):
+                        return f"表不存在: {tn}"
+                    if not column_exists(tn, cn):
+                        return f"列不存在: {tn}.{cn}"
+                else:
+                    found = any(column_exists(t, s) for t in selected_tables)
+                    if not found:
+                        return f"列不存在: {s}"
+                return None
 
                 extra_missing = []
                 for col in where_cols + having_cols + group_cols + order_cols:
@@ -464,6 +582,7 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         try:
             sql = compiler.compile(dsl_json)
             print(f"DEBUG: Compiled SQL: {sql}")
+            sql = _quote_case_identifiers(sql)
             await EventBus.emit_substep(node="DSLtoSQL", step="编译完成", detail="SQL 已生成")
         except Exception as e:
             print(f"Error compiling SQL: {e}")
