@@ -163,7 +163,6 @@ async def clarify_intent_node(state: AgentState, config: dict = None) -> dict:
             await EventBus.emit_substep("ClarifyIntent", "ambiguity", "检测到歧义，需要用户澄清")
             
             return {
-                "messages": [AIMessage(content=content)],
                 "intent_clear": False,
                 "clarify": payload,
                 "last_executed_node": "ClarifyIntent"

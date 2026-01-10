@@ -66,7 +66,7 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
 
         print(f"DEBUG: dsl_to_sql_node input dsl: {dsl_str}")
         # 前置拦截：非 JSON 内容（澄清/文本）直接返回意图不清晰
-        if isinstance(dsl_str, str) and not dsl_str.strip().startswith("{"):
+        if isinstance(dsl_str, str) and (not dsl_str.strip().startswith("{") and not dsl_str.strip().startswith("[")):
             return {
                 "intent_clear": False,
                 "clarify_answer": None  # 强制清除旧的澄清答案，避免 Supervisor 误判
@@ -376,49 +376,49 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                 group_cols = dsl_json.get("group_by") or []
                 order_cols = [o.get("column") for o in (dsl_json.get("order_by") or []) if isinstance(o, dict)]
                 
-            def verify_ref(colref: str):
-                if not colref:
+                def verify_ref(colref: str):
+                    if not colref:
+                        return None
+                    if colref in aliases:
+                        return None
+                    s = str(colref)
+                    if s.upper() in ["TRUE", "FALSE", "NULL"]:
+                        return None
+                    # 如果是复杂表达式，提取其中的列引用进行逐项校验
+                    if any(ch in s for ch in ("(", ")", " ", "-", "+", "*", "/", ":", "'", '"')):
+                        func_names = {"date_trunc","to_timestamp","cast","coalesce","extract","concat"}
+                        keywords = {"interval","current_date","current_timestamp"}
+                        tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*", s)
+                        for tok in tokens:
+                            tl = tok.lower()
+                            if tl in func_names or tl in keywords:
+                                continue
+                            if re.match(r"^[0-9]+$", tok):
+                                continue
+                            if "." in tok:
+                                tn, cn = tok.split(".", 1)
+                                if not table_exists(tn):
+                                    return f"表不存在: {tn}"
+                                if not column_exists(tn, cn):
+                                    return f"列不存在: {tn}.{cn}"
+                            else:
+                                # 裸列必须存在于选中表之一
+                                found = any(column_exists(t, tok) for t in selected_tables)
+                                if not found:
+                                    return f"列不存在: {tok}"
+                        return None
+                    # 简单引用直接校验
+                    if "." in s:
+                        tn, cn = s.split(".", 1)
+                        if not table_exists(tn):
+                            return f"表不存在: {tn}"
+                        if not column_exists(tn, cn):
+                            return f"列不存在: {tn}.{cn}"
+                    else:
+                        found = any(column_exists(t, s) for t in selected_tables)
+                        if not found:
+                            return f"列不存在: {s}"
                     return None
-                if colref in aliases:
-                    return None
-                s = str(colref)
-                if s.upper() in ["TRUE", "FALSE", "NULL"]:
-                    return None
-                # 如果是复杂表达式，提取其中的列引用进行逐项校验
-                if any(ch in s for ch in ("(", ")", " ", "-", "+", "*", "/", ":", "'", '"')):
-                    func_names = {"date_trunc","to_timestamp","cast","coalesce","extract","concat"}
-                    keywords = {"interval","current_date","current_timestamp"}
-                    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*", s)
-                    for tok in tokens:
-                        tl = tok.lower()
-                        if tl in func_names or tl in keywords:
-                            continue
-                        if re.match(r"^[0-9]+$", tok):
-                            continue
-                        if "." in tok:
-                            tn, cn = tok.split(".", 1)
-                            if not table_exists(tn):
-                                return f"表不存在: {tn}"
-                            if not column_exists(tn, cn):
-                                return f"列不存在: {tn}.{cn}"
-                        else:
-                            # 裸列必须存在于选中表之一
-                            found = any(column_exists(t, tok) for t in selected_tables)
-                            if not found:
-                                return f"列不存在: {tok}"
-                    return None
-                # 简单引用直接校验
-                if "." in s:
-                    tn, cn = s.split(".", 1)
-                    if not table_exists(tn):
-                        return f"表不存在: {tn}"
-                    if not column_exists(tn, cn):
-                        return f"列不存在: {tn}.{cn}"
-                else:
-                    found = any(column_exists(t, s) for t in selected_tables)
-                    if not found:
-                        return f"列不存在: {s}"
-                return None
 
                 extra_missing = []
                 for col in where_cols + having_cols + group_cols + order_cols:
@@ -426,20 +426,17 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
                     if err:
                         extra_missing.append(err)
 
-                # 解析并校验 JOIN ON
                 join_on_missing = []
                 for j in dsl_json.get("joins", []) or []:
                     on = j.get("on")
                     if isinstance(on, str) and on.strip():
-                        # 简单的正则提取
-                        # 提取所有 word.word 或 word
                         tokens = re.findall(r"([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)", on)
                         for tok in tokens:
                             tn, cn = tok.split(".", 1)
                             if not table_exists(tn):
-                                 join_on_missing.append(f"JOIN 引用的表不存在: {tn}")
+                                join_on_missing.append(f"JOIN 引用的表不存在: {tn}")
                             elif not column_exists(tn, cn):
-                                 join_on_missing.append(f"JOIN 引用的列不存在: {tn}.{cn}")
+                                join_on_missing.append(f"JOIN 引用的列不存在: {tn}.{cn}")
 
                 issues = []
                 if missing_tables:
@@ -595,5 +592,6 @@ async def dsl_to_sql_node(state: AgentState, config: dict = None) -> dict:
         print(f"ERROR in dsl_to_sql_node: {e}")
         return {
             "intent_clear": False,
-            "clarify_answer": None
+            "clarify_answer": None,
+            "error": str(e)
         }

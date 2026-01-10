@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, ConfigProvider, theme, Splitter, Grid, Drawer, Button, message, Tabs } from 'antd';
 import { DatabaseOutlined, ProjectOutlined, CommentOutlined } from '@ant-design/icons';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import SchemaBrowser from '../components/SchemaBrowser';
 import ChatWindow from '../components/ChatWindow';
@@ -17,7 +17,6 @@ const { useBreakpoint } = Grid;
 
 const ChatPageContent: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
-  const navigate = useNavigate();
   const screens = useBreakpoint();
   const isMobile = !screens.md; 
   

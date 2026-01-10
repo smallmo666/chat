@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, Suspense } from 'react';
 import * as antd from 'antd';
 import * as icons from '@ant-design/icons';
-import { Button, Tooltip, Modal, theme, Space, Typography } from 'antd';
+import { Button, Tooltip, Modal, Space, Typography } from 'antd';
 import { 
     FullscreenOutlined, 
     FullscreenExitOutlined, 
@@ -17,7 +17,6 @@ interface ArtifactRendererProps {
 }
 
 const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ code, data, images }) => {
-    const { token } = theme.useToken();
     const containerRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const [Component, setComponent] = useState<React.ReactNode | null>(null);

@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from src.core.redis_client import get_redis_client
 from src.core.database import get_query_db
 import json
+from sqlalchemy import text
 
 router = APIRouter(tags=["query"])
 
@@ -14,7 +15,7 @@ async def stream_csv(sql: str, project_id: int):
             result = await conn.stream(text(sql))
             headers_sent = False
             async for row in result:
-                d = dict(row)
+                d = dict(row._mapping)
                 if not headers_sent:
                     headers_sent = True
                     yield ",".join([str(k) for k in d.keys()]) + "\n"

@@ -6,7 +6,6 @@ import {
     LoadingOutlined, ArrowDownOutlined
 } from '@ant-design/icons';
 import { useTheme } from '../context/ThemeContext';
-import { useSchema } from '../context/SchemaContext';
 import type { Message, TaskItem } from '../chatTypes';
 import MessageBubble from './chat/MessageBubble';
 import InputBar from './chat/InputBar';
@@ -39,7 +38,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 }) => {
     const { isDarkMode } = useTheme();
     const { token } = theme.useToken();
-    const { dbTables } = useSchema();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const [showScrollButton, setShowScrollButton] = useState(false);
@@ -193,10 +191,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         } finally {
             setIsPythonRunning(false);
         }
-    };
-
-    const handleFeedback = (index: number, type: 'like' | 'dislike') => {
-        antdMessage.success(type === 'like' ? "感谢您的点赞！系统已记录并学习。" : "感谢反馈，我们会持续改进。");
     };
 
     return (

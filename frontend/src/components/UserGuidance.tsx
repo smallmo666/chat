@@ -28,7 +28,7 @@ const UserGuidance: React.FC<UserGuidanceProps> = ({
     onComplete,
     className = ''
 }) => {
-    const [currentStep, setCurrentStep] = useState(0);
+    const [currentStep] = useState(0);
     const [isVisible, setIsVisible] = useState(isFirstTime);
     const [tourOpen, setTourOpen] = useState(false);
 
@@ -62,20 +62,6 @@ const UserGuidance: React.FC<UserGuidanceProps> = ({
             icon: <ArrowRightOutlined />
         }
     ];
-
-    const handleNext = () => {
-        if (currentStep < guidanceSteps.length - 1) {
-            setCurrentStep(currentStep + 1);
-        } else {
-            handleComplete();
-        }
-    };
-
-    const handlePrevious = () => {
-        if (currentStep > 0) {
-            setCurrentStep(currentStep - 1);
-        }
-    };
 
     const handleSkip = () => {
         setIsVisible(false);

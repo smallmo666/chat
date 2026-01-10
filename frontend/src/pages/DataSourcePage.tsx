@@ -1,6 +1,6 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, App, Popconfirm } from 'antd';
 import { useState, useEffect } from 'react';
-import { PlusOutlined, DeleteOutlined, ThunderboltOutlined, EditOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import api from '../lib/api';
 
 interface DataSource {

@@ -8,9 +8,9 @@ interface VisualizationPanelProps {
     onUpdateConfig?: (config: any) => void;
 }
 
-const VisualizationPanel: React.FC<VisualizationPanelProps> = ({ config, onUpdateConfig }) => {
+const VisualizationPanel: React.FC<VisualizationPanelProps> = ({ config }) => {
     const chartRef = useRef<HTMLDivElement>(null);
-    const chartInstance = useRef<echarts.ECharts>();
+    const chartInstance = useRef<ReturnType<typeof echarts.init> | null>(null);
 
     useEffect(() => {
         if (!chartRef.current || !config) return;
@@ -34,7 +34,7 @@ const VisualizationPanel: React.FC<VisualizationPanelProps> = ({ config, onUpdat
         return () => {
             window.removeEventListener('resize', handleResize);
             chartInstance.current?.dispose();
-            chartInstance.current = undefined;
+            chartInstance.current = null;
         };
     }, [config]);
 

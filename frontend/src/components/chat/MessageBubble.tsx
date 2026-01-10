@@ -78,13 +78,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
     onSendMessage,
     isDarkMode = false,
     setEditableSql,
-    setIsReviewOpen,
-    setViewingPlan,
-    setIsPlanModalOpen,
-    setEditablePythonCode,
-    setPythonExecResult,
-    setIsPythonEditOpen,
-    latestData
+    setIsReviewOpen
 }) => {
     const { token } = useToken();
     // Removed local state that conflicts with parent props
@@ -149,6 +143,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
         if (!item.clarification) return null;
         
         const { question, options, type } = item.clarification;
+        const safeOptions = Array.isArray(options) ? options : [];
         const isMultiple = type === 'multiple';
         
         return (
@@ -161,14 +156,31 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <Typography.Text style={{ fontSize: 14 }}>{question}</Typography.Text>
                     
-                    {isMultiple ? (
+                    {safeOptions.length === 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                                暂无可选项，请直接在输入框补充你的选择，或点击跳过继续。
+                            </Typography.Text>
+                            <Button 
+                                size="small"
+                                onClick={() => {
+                                    onSendMessage("", "clarify");
+                                    setClarifySubmitted(true);
+                                }}
+                                style={{ width: 'fit-content' }}
+                                disabled={clarifySubmitted}
+                            >
+                                跳过
+                            </Button>
+                        </div>
+                    ) : isMultiple ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <Checkbox.Group 
                                 style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}
                                 value={selectedOptions} 
                                 onChange={(checkedValues) => setSelectedOptions(checkedValues as string[])}
                             >
-                                {options.map((opt, idx) => (
+                                {safeOptions.map((opt, idx) => (
                                     <Checkbox key={idx} value={opt} style={{ marginLeft: 0 }} disabled={clarifySubmitted}>
                                         {opt}
                                     </Checkbox>
@@ -201,7 +213,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = memo(({
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                            {options.map((opt, idx) => (
+                            {safeOptions.map((opt, idx) => (
                                 <Button 
                                     key={idx} 
                                     size="small"

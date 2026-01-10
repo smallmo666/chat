@@ -1,11 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, Space, Button, Tooltip } from 'antd';
 import { 
     CodeOutlined, SearchOutlined, BulbOutlined, 
-    BarChartOutlined, TableOutlined, DownloadOutlined,
-    EditOutlined, ExpandOutlined, ShrinkOutlined
+    BarChartOutlined, DownloadOutlined,
+    ExpandOutlined, ShrinkOutlined
 } from '@ant-design/icons';
-import { useState } from 'react';
 
 interface MessageContentCardProps {
     type: 'code' | 'insight' | 'visualization' | 'download' | 'plan' | 'thinking' | 'clarification';

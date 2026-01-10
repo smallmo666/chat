@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Button, Typography, Space, Modal, Form, Input, Select, App, Empty, Tag, Row, Col, Input as SearchInput } from 'antd';
 import { PlusOutlined, ProjectOutlined, DatabaseOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 
 const { Title, Text } = Typography;
@@ -24,7 +23,6 @@ const ProjectPage: React.FC = () => {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
-  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const { message } = App.useApp();
   const [searchText, setSearchText] = useState('');

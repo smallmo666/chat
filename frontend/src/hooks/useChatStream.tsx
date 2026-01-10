@@ -318,7 +318,7 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                             // To keep single bubble, we can append to `content`.
                         } else if (eventType === 'result') {
                             updateLastAgentMessage(msg => {
-                                let clarification = undefined;
+                                let clarification = msg.clarification;
                                 let content = data.content;
                                 try {
                                     if (typeof content === 'string') {
@@ -335,8 +335,38 @@ export const useChatStream = ({ projectId, threadId, onSessionCreated }: UseChat
                                         if (jsonStr) {
                                             const parsed = JSON.parse(jsonStr);
                                             if (parsed.status === 'AMBIGUOUS') {
-                                                clarification = parsed;
-                                                content = '';
+                                                const scope =
+                                                    parsed.scope === 'task' || parsed.scope === 'schema' || parsed.scope === 'param'
+                                                        ? parsed.scope
+                                                        : undefined;
+                                                const parsedType: 'select' | 'multiple' = parsed.type === 'multiple' ? 'multiple' : 'select';
+                                                const parsedClarification = {
+                                                    question: typeof parsed.question === 'string' ? parsed.question : '',
+                                                    options: Array.isArray(parsed.options) ? parsed.options : [],
+                                                    type: parsedType,
+                                                    scope
+                                                };
+
+                                                if (clarification) {
+                                                    const existingOptions = Array.isArray(clarification.options) ? clarification.options : [];
+                                                    const nextOptions = parsedClarification.options.length > 0 ? parsedClarification.options : existingOptions;
+                                                    clarification = {
+                                                        ...clarification,
+                                                        ...parsedClarification,
+                                                        question: parsedClarification.question || clarification.question,
+                                                        options: nextOptions,
+                                                        type: parsedClarification.type ?? clarification.type
+                                                    };
+                                                    content = '';
+                                                } else if (parsedClarification.question || parsedClarification.options.length > 0) {
+                                                    clarification = {
+                                                        question: parsedClarification.question,
+                                                        options: parsedClarification.options,
+                                                        type: parsedClarification.type,
+                                                        scope: parsedClarification.scope
+                                                    };
+                                                    content = '';
+                                                }
                                             }
                                         }
                                     }
